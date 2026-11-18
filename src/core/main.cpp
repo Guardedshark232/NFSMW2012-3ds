@@ -80,11 +80,12 @@ int main(int argc, char **argv) {
             renderer_reset_view();
         }
 
-        float throttle = input_is_pressed(ACT_ACCELERATE) ? 1.0f : 0.0f;
-        float brake = input_is_pressed(ACT_BRAKE) ? 1.0f : 0.0f;
-        bool nitrous = input_is_pressed(ACT_NITROUS);
-        bool handbrake = input_is_pressed(ACT_HANDBRAKE);
-        float steering = input_get_stick_x();
+        bool drivingInput = !easyDriveOpen;
+        float throttle = drivingInput && input_is_pressed(ACT_ACCELERATE) ? 1.0f : 0.0f;
+        float brake = drivingInput && input_is_pressed(ACT_BRAKE) ? 1.0f : 0.0f;
+        bool nitrous = drivingInput && input_is_pressed(ACT_NITROUS);
+        bool handbrake = drivingInput && input_is_pressed(ACT_HANDBRAKE);
+        float steering = drivingInput ? input_get_stick_x() : 0.0f;
 
 #if DIAG_AUTO_DRIVE
         // Automated driving verification: full throttle from frame 120 to

@@ -87,7 +87,11 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
     draw_string("km/h", 125.f, 52.f, 0.45f, 0.45f, C2D_Color32(0, 200, 255, 255));
 
     char gearBuf[64];
-    snprintf(gearBuf, sizeof(gearBuf), "GEAR %d   |   %4.0f RPM", car->gear, car->rpm);
+    if (car->reversing) {
+        snprintf(gearBuf, sizeof(gearBuf), "GEAR R   |   %4.0f RPM", car->rpm);
+    } else {
+        snprintf(gearBuf, sizeof(gearBuf), "GEAR %d   |   %4.0f RPM", car->gear, car->rpm);
+    }
     draw_string(gearBuf, 16.f, 80.f, 0.48f, 0.48f, C2D_Color32(0, 220, 255, 255));
 
     // Minimap / Radar Preview (Top-Right)
@@ -164,7 +168,7 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
     }
 
     draw_string("Porsche 911 Carrera S (2012)  |  Fairhaven City", 16.f, 192.f, 0.40f, 0.40f, C2D_Color32(240, 200, 40, 255));
-    draw_string("Press [START] EasyDrive | [SELECT] Reset car", 16.f, 206.f, 0.36f, 0.36f, C2D_Color32(140, 160, 180, 255));
+    draw_string("A Drive | B Brake / Reverse | START Menu | SELECT Reset", 16.f, 206.f, 0.36f, 0.36f, C2D_Color32(140, 160, 180, 255));
 
     // Live world telemetry: makes ground/camera faults visible on hardware.
     char dbgBuf[128];

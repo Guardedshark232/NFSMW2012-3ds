@@ -93,7 +93,9 @@ void physics_update(float dt, float throttle, float brake, float steering, bool 
     // Drift Detection (Criterion style: brake tap or handbrake while turning)
     bool initiating_drift = !g_car.reversing && (std::abs(steering) > 0.35f) &&
                             (handbrake || brake > 0.2f) && (g_car.speed > 40.0f);
-    if (initiating_drift) {
+    if (g_car.reversing) {
+        g_car.is_drifting = false;
+    } else if (initiating_drift) {
         g_car.is_drifting = true;
     } else if (std::abs(steering) < 0.1f || g_car.speed < 25.0f) {
         g_car.is_drifting = false;
