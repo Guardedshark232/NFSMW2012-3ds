@@ -1,0 +1,689 @@
+{
+ "materials": {
+  "0x1000000000dbccc": {
+   "tex": "0x1000000000dbcd0",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 403
+  },
+  "0x1000000000ab1a4": {
+   "tex": "0x1000000000b0245",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 150
+  },
+  "0x100000000104e61": {
+   "tex": "0x100000000104e55",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 454
+  },
+  "0x1000000000ab197": {
+   "tex": "0x1000000000b0245",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 150
+  },
+  "0x100000000148700": {
+   "tex": "0x1000000000f69e4",
+   "bundle": "ARENA_527914.BNDL",
+   "index": 109
+  },
+  "0x1000000000ab1a3": {
+   "tex": "0x1000000000b0245",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 150
+  },
+  "0x1000000000abcbc": {
+   "tex": "0x1000000000abcb5",
+   "bundle": "DISTRICT_164408.BNDL",
+   "index": 648
+  },
+  "0x1000000000d81eb": {
+   "tex": "0x1000000000d81e1",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 187
+  },
+  "0x1000000000ab1a9": {
+   "tex": "0x1000000000ab190",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 307
+  },
+  "0x1000000000887d3": {
+   "tex": "0x10000000007192c",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 197
+  },
+  "0x100000000193c41": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x1000000000ab1a8": {
+   "tex": "0x1000000000ab190",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 307
+  },
+  "0x1000000000ab1a6": {
+   "tex": "0x1000000000ab190",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 307
+  },
+  "0x1000000000ab1a5": {
+   "tex": "0x1000000000ab190",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 307
+  },
+  "0x1000000000ab1a7": {
+   "tex": "0x1000000000ab190",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 307
+  },
+  "0x1000000000b01cc": {
+   "tex": "0x1000000000b01cb",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 148
+  },
+  "0x10000000010d3ae": {
+   "tex": "0x100000000071976",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 311
+  },
+  "0x1000000000f6a14": {
+   "tex": "0x1000000000f6a10",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 257
+  },
+  "0x10000000010cb37": {
+   "tex": "0x10000000010cb36",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 271
+  },
+  "0x1000000000ab177": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x1000000000f698f": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x100000000148821": {
+   "tex": "0x1000000000719a3",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 379
+  },
+  "0x100000000071b2c": {
+   "tex": "0x10000000012864c",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 451
+  },
+  "0x10000000010cb2a": {
+   "tex": "0x1000000000dbcd0",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 403
+  },
+  "0x1000000000dfad8": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000913a4": {
+   "tex": "0x10000000008ab09",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 581
+  },
+  "0x1000000000ab174": {
+   "tex": "0x10000000008ad03",
+   "bundle": "DISTRICT_164408.BNDL",
+   "index": 582
+  },
+  "0x1000000000f6a15": {
+   "tex": "0x1000000001d5594",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 327
+  },
+  "0x1000000000f69a9": {
+   "tex": "0x1000000000f696f",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 408
+  },
+  "0x1000000000f69ae": {
+   "tex": "0x1000000000f69ad",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 239
+  },
+  "0x100000000071fe7": {
+   "tex": "0x100000000071fe6",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 392
+  },
+  "0x1000000000d496f": {
+   "tex": "0x10000000007196e",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 308
+  },
+  "0x10000000012864d": {
+   "tex": "0x100000000128649",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 450
+  },
+  "0x1000000001176a1": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x100000000117715": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001486f7": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000010f457": {
+   "tex": "0x1000000000f3a8b",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 221
+  },
+  "0x1000000001126de": {
+   "tex": "0x10000000008ad03",
+   "bundle": "DISTRICT_164408.BNDL",
+   "index": 582
+  },
+  "0x100000000046535": {
+   "tex": "0x100000000046533",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 156
+  },
+  "0x10000000013cf74": {
+   "tex": "0x100000000071965",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 304
+  },
+  "0x10000000010d392": {
+   "tex": "0x1000000000f696f",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 408
+  },
+  "0x1000000000feb2e": {
+   "tex": "0x1000000000f69e4",
+   "bundle": "ARENA_527914.BNDL",
+   "index": 109
+  },
+  "0x1000000000f69a3": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x1000000000f69a0": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x1000000000ab146": {
+   "tex": "0x10000000008ab09",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 581
+  },
+  "0x1000000000ae017": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000010c25f": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000887d1": {
+   "tex": "0x10000000006175b",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 212
+  },
+  "0x10000000013d3ab": {
+   "tex": "0x1000000000f69e4",
+   "bundle": "ARENA_527914.BNDL",
+   "index": 109
+  },
+  "0x10000000008aadf": {
+   "tex": "0x100000000071cf2",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 202
+  },
+  "0x10000000011769b": {
+   "tex": "0x1000000000d4974",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 400
+  },
+  "0x10000000011769c": {
+   "tex": "0x100000000104e47",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 451
+  },
+  "0x10000000011769d": {
+   "tex": "0x100000000193bb1",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 673
+  },
+  "0x1000000001176a0": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000011769f": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001f6343": {
+   "tex": "0x10000000008c337",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 254
+  },
+  "0x100000000148820": {
+   "tex": "0x100000000094422",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 259
+  },
+  "0x100000000084d62": {
+   "tex": "0x10000000007192c",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 197
+  },
+  "0x1000000000887cf": {
+   "tex": "0x100000000071ce9",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 322
+  },
+  "0x1000000000887d7": {
+   "tex": "0x100000000104f42",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 413
+  },
+  "0x1000000000a938d": {
+   "tex": "0x100000000071965",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 304
+  },
+  "0x1000000001486ff": {
+   "tex": "0x100000000193bb1",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 673
+  },
+  "0x1000000001486f8": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001604ba": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001604bb": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001604bd": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000adf9d": {
+   "tex": "0x1000000000adfa2",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 322
+  },
+  "0x100000000137514": {
+   "tex": "0x1000000000adfa2",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 322
+  },
+  "0x1000000000ab145": {
+   "tex": "0x1000000000ab142",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 299
+  },
+  "0x1000000000608eb": {
+   "tex": "0x1000000000608e9",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 162
+  },
+  "0x1000000000f69be": {
+   "tex": "0x100000000157da5",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 289
+  },
+  "0x1000000000f69bd": {
+   "tex": "0x1000000000f69b3",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 241
+  },
+  "0x100000000094c02": {
+   "tex": "0x1000000001e1dc9",
+   "bundle": "ARENA_527910.BNDL",
+   "index": 489
+  },
+  "0x10000000013d341": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x1000000000da7a6": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000da7b4": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000da7a8": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000013d31e": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000013d388": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000010cb33": {
+   "tex": "0x10000000010cb30",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 792
+  },
+  "0x10000000013d340": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000adfdc": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000010cb3e": {
+   "tex": "0x10000000010cb36",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 271
+  },
+  "0x1000000000adfcc": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000010c260": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x100000000104e60": {
+   "tex": "0x100000000193bb1",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 673
+  },
+  "0x10000000010c261": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x100000000104e6d": {
+   "tex": "0x100000000193bb1",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 673
+  },
+  "0x10000000010c262": {
+   "tex": "0x100000000193bb1",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 673
+  },
+  "0x100000000104e40": {
+   "tex": "0x100000000104e6c",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 463
+  },
+  "0x1000000000aba23": {
+   "tex": "0x10000000015db42",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 859
+  },
+  "0x1000000001126e2": {
+   "tex": "0x100000000081984",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 221
+  },
+  "0x10000000013cf76": {
+   "tex": "0x10000000008ad03",
+   "bundle": "DISTRICT_164408.BNDL",
+   "index": 582
+  },
+  "0x10000000010d3ad": {
+   "tex": "0x100000000087307",
+   "bundle": "ARENA_527908.BNDL",
+   "index": 526
+  },
+  "0x10000000013cf72": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x1000000000dfbb6": {
+   "tex": "0x100000000071965",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 304
+  },
+  "0x1000000000dfbb7": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x1000000000dfad6": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000dfad7": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000dfb3c": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001866b1": {
+   "tex": "0x1000000000f6a10",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 257
+  },
+  "0x1000000001866b0": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x1000000000992f0": {
+   "tex": "0x1000000000f696f",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 408
+  },
+  "0x100000000193c40": {
+   "tex": "0x10000000008ad03",
+   "bundle": "DISTRICT_164408.BNDL",
+   "index": 582
+  },
+  "0x1000000001866be": {
+   "tex": "0x1000000000f696f",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 408
+  },
+  "0x100000000117716": {
+   "tex": "0x100000000104f42",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 413
+  },
+  "0x1000000001486f6": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000001866b2": {
+   "tex": "0x1000000001d5594",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 327
+  },
+  "0x1000000000ae116": {
+   "tex": "0x100000000193bb1",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 673
+  },
+  "0x1000000000afd71": {
+   "tex": "0x1000000000afd76",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 353
+  },
+  "0x1000000000dfadb": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x10000000013d3d2": {
+   "tex": "0x1000000000a97a6",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 385
+  },
+  "0x1000000000992ea": {
+   "tex": "0x1000000000992f5",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 266
+  },
+  "0x1000000000d4955": {
+   "tex": "0x1000000000d4974",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 400
+  },
+  "0x100000000137519": {
+   "tex": "0x10000000013751a",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 535
+  },
+  "0x10000000013d402": {
+   "tex": "0x10000000013d403",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 549
+  },
+  "0x10000000016c833": {
+   "tex": "0x10000000016c834",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 641
+  },
+  "0x1000000001866b3": {
+   "tex": "0x1000000000f696f",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 408
+  },
+  "0x1000000001866b4": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x1000000001866b5": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x1000000001126fb": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x100000000180ebc": {
+   "tex": "0x1000000000b01cb",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 148
+  },
+  "0x100000000161435": {
+   "tex": "0x100000000161434",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 498
+  },
+  "0x10000000006d25d": {
+   "tex": "0x10000000006d255",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 244
+  },
+  "0x1000000001866bc": {
+   "tex": "0x1000000000f6a10",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 257
+  },
+  "0x1000000001866bd": {
+   "tex": "0x1000000001d5594",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 327
+  },
+  "0x1000000001866bf": {
+   "tex": "0x1000000000abcbb",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 393
+  },
+  "0x1000000001866c0": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x1000000001866bb": {
+   "tex": "0x1000000000f699d",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 234
+  },
+  "0x100000000171ec4": {
+   "tex": "0x1000000000653c7",
+   "bundle": "ARENA_527910.BNDL",
+   "index": 181
+  },
+  "0x10000000006d240": {
+   "tex": "0x10000000006d23f",
+   "bundle": "GLOBALRESOURCES.BNDL",
+   "index": 236
+  },
+  "0x1000000000a70f8": {
+   "tex": "0x1000000000dae01",
+   "bundle": "ARENA_527912.BNDL",
+   "index": 231
+  },
+  "0x1000000000d81ec": {
+   "tex": "0x1000000000d81e8",
+   "bundle": "DISTRICT_701574.BNDL",
+   "index": 190
+  },
+  "0x10000000006d24c": {
+   "tex": "0x10000000010d882",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 498
+  },
+  "0x10000000006f109": {
+   "tex": "0x10000000010d882",
+   "bundle": "ARENA_527911.BNDL",
+   "index": 498
+  }
+ },
+ "missing": [
+  "0x100000000080e20",
+  "0x1000000000dbcf1",
+  "0x1000000000608ec",
+  "0x10000000014881f",
+  "0x100000000060906",
+  "0x100000000080e21",
+  "0x10000000005f12f",
+  "0x1000000000078fd"
+ ]
+}

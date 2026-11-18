@@ -1,0 +1,41 @@
+; Colored vertex shader for NFS 3DS engine.
+
+.fvec mvp[4]
+
+.constf myconst(0.0, 1.0, -1.0, -0.5)
+.constf cscale(0.00392156862745, 0.0, 0.0, 0.0)
+.constf uvscale(0.000015259021896696422, 0.5000076295109483, 0.0, 0.0)
+.alias  zeros myconst.xxxx
+.alias  ones  myconst.yyyy
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.alias inpos v0
+.alias inclr v1
+.alias inuv  v2
+
+.proc main
+	mov r0.xyz, inpos
+	mov r0.w,   ones
+
+	dp4 r1.x, mvp[0], r0
+	dp4 r1.y, mvp[1], r0
+	dp4 r1.z, mvp[2], r0
+	dp4 r1.w, mvp[3], r0
+
+	mov outpos, r1
+	; Signed 16-bit atlas UVs biased by -32768 -> scale and re-centre.
+	mov r2.xy, inuv
+	mov r2.zw, zeros
+	mov r3, uvscale.xxxx
+	mul r2, r2, r3
+	mov r3, uvscale.yyyy
+	add outtc0, r2, r3
+	; Scale uint8 vertex colors (0..255) to 0.0..1.0
+	mov r2, cscale.xxxx
+	mul outclr, inclr, r2
+
+	end
+.end

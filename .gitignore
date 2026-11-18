@@ -1,0 +1,17 @@
+# Session and editor swap files
+session-*.md
+*.kate-swp
+.opencode/
+
+# Build outputs and compiled 3DS binaries
+build/
+*.elf
+*.cia
+*.3dsx
+*.map
+*.smdh
+romfs.bin
+
+# External samples and folders
+3ds samples/
+NFSU2-3DS/
