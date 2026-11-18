@@ -2,8 +2,8 @@
 """Build a downscaled texture atlas for the Fairhaven world mesh.
 
 The 3DS has no use for the PC game's 512-2048 px maps, so every referenced
-diffuse texture is reduced to a 128x128 tile and packed into a single
-1024x1024 RGBA4444 page (64 tile slots).  A one-texel inset around each tile
+diffuse texture is reduced to a 32x32 tile and packed into a single
+1024x1024 RGBA4444 page (1024 tile slots). A one-texel inset around each tile
 keeps bilinear filtering from bleeding into the neighbour.
 
 The world extractor bakes the atlas rectangle into the mesh's UVs, so the
@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mwtex
 
 ATLAS = 1024
-TILE = 128
+TILE = 32
 GRID = ATLAS // TILE          # 8x8 = 64 slots
 INSET = 1.0                   # texels of padding on each tile edge
 FALLBACK = (-1, -1)           # grey tile for materials with no texture

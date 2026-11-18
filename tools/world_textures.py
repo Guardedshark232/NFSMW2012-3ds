@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Pick a diffuse/albedo texture for every world material.
+"""Pick a diffuse/albedo texture for every material used by the full world.
 
-Walks the same renderables as extract_world.py (centre/radius selection),
-resolves each submesh's material id across all bundles, decodes every texture
+Walks the same renderables as extract_world_sectors.py, resolves each
+submesh's material id across all bundles, decodes each candidate texture
 the material references and keeps the one that looks most like an albedo
 (see mwtex.texture_albedo_rank).
 
@@ -11,6 +11,7 @@ Output: tools/world_texture_map.json
       "missing": ["0x..."] }
 """
 import json
+import glob
 import math
 import os
 import sys
@@ -22,10 +23,8 @@ from bndl import Bundle
 from mwmesh import parse_renderable
 
 MW_DIR = mwtex.MW_DIR
-MAIN_BUNDLE = "ARENA_527911.BNDL"
-ORIGIN = (-168.0, 30.0, 4058.0)
-RADIUS = 750.0
-MAX_RENDERABLE_RADIUS = 500.0
+WORLD_PATTERNS = ("ARENA_*.BNDL", "DISTRICT_*.BNDL", "TRK_UNIT*.BNDL")
+MAX_RENDERABLE_RADIUS = 5000.0
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_JSON = os.path.join(HERE, "world_texture_map.json")
@@ -44,31 +43,33 @@ OVERRIDES = {
 
 
 def renderable_materials():
-    """Return {material_id: submesh_count} for the selected world renderables."""
-    b = Bundle(os.path.join(MW_DIR, MAIN_BUNDLE))
+    """Return {material_id: submesh_count} across the streamed world meshes."""
     counts = {}
-    for r in b.resources:
-        if r.type_id != 5 or not r.has_stream1:
-            continue
-        info = parse_renderable(r, b)
-        if not info:
-            continue
-        cx, cy, cz = info["centre"]
-        if abs(cx) < 50.0 and abs(cz) < 50.0:
-            continue
-        if info["radius"] > MAX_RENDERABLE_RADIUS:
-            continue
-        if math.hypot(cx - ORIGIN[0], cz - ORIGIN[2]) > RADIUS:
-            continue
-        start = info["subs"][-1]["desc_off"] + 96
-        d0 = info["d0"]
-        for k in range(info["nsub"]):
-            off = start + k * 16
-            if off + 16 > len(d0):
-                break
-            mid = int.from_bytes(d0[off:off + 8], "little")
-            if mid:
-                counts[mid] = counts.get(mid, 0) + 1
+    paths = sorted({p for pattern in WORLD_PATTERNS
+                    for p in glob.glob(os.path.join(MW_DIR, pattern))})
+    seen = set()
+    for bi, path in enumerate(paths):
+        b = Bundle(path)
+        for r in b.resources:
+            if r.type_id != 5 or not r.has_stream1 or r.id in seen:
+                continue
+            info = parse_renderable(r, b)
+            if not info:
+                continue
+            cx, cy, cz = info["centre"]
+            if (abs(cx) <= 50.0 and abs(cz) <= 50.0) or info["radius"] >= MAX_RENDERABLE_RADIUS:
+                continue
+            seen.add(r.id)
+            start = info["subs"][-1]["desc_off"] + 96
+            d0 = info["d0"]
+            for k in range(info["nsub"]):
+                off = start + k * 16
+                if off + 16 > len(d0):
+                    break
+                mid = int.from_bytes(d0[off:off + 8], "little")
+                if mid:
+                    counts[mid] = counts.get(mid, 0) + 1
+        print("  [%d/%d] %s: %d materials" % (bi + 1, len(paths), os.path.basename(path), len(counts)), flush=True)
     return counts
 
 
@@ -76,7 +77,9 @@ def choose_textures(counts):
     from PIL import Image
     chosen = {}
     missing = []
-    for mid, nsub in sorted(counts.items(), key=lambda kv: -kv[1]):
+    rank_cache = {}
+    ordered = sorted(counts.items(), key=lambda kv: -kv[1])
+    for mi, (mid, nsub) in enumerate(ordered):
         if mid in OVERRIDES:
             tid = OVERRIDES[mid]
             if tid is None:
@@ -97,10 +100,11 @@ def choose_textures(counts):
             info = b.texture_info(r)
             if not info or info["format"] not in (71, 72, 77, 78):
                 continue
-            px = mwtex.decode_texture(b, r)
-            if px is None:
-                continue
-            rank = mwtex.texture_albedo_rank(Image.fromarray(px, "RGBA"))
+            if tid not in rank_cache:
+                px = mwtex.decode_texture(b, r)
+                rank_cache[tid] = (mwtex.texture_albedo_rank(Image.fromarray(px, "RGBA"))
+                                   if px is not None else 0.0)
+            rank = rank_cache[tid]
             if rank <= 0.0:
                 continue
             # Mild preference for higher resolution when the scores are close.
@@ -112,6 +116,10 @@ def choose_textures(counts):
             missing.append(mid)
         else:
             chosen[mid] = dict(tex=best[1], bundle=best[2], index=best[3])
+
+        if (mi + 1) % 100 == 0 or mi + 1 == len(ordered):
+            print("  scored %d/%d materials (%d unique textures ranked)" %
+                  (mi + 1, len(ordered), len(rank_cache)), flush=True)
 
     return chosen, missing
 

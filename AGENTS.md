@@ -38,9 +38,7 @@ Do not modify those unless the packaging step is actually broken.
 - `src/renderer/world_mesh.cpp` — dynamic spatial streaming engine (`world_manifest.bin` + `sec_*.mwmesh`), chunk upload/unloading, local ground-height grids. `MWVertex` here is the authoritative vertex layout.
 - `tools/` — host-side Python asset pipeline (Pillow + numpy required).
 - `romfs/assets/` — generated runtime assets. `world_manifest.bin`, `sectors/*.mwmesh`, and `*.t3x` are build products; regenerate them, never hand-edit.
-- `NFSU2-3DS/` — vendored upstream shell/tools; avoid changing it.
-- `session-*.md` — a raw conversation transcript. Ignore it when searching
-  for code or docs; it is huge and contains stale snippets.
+- `progress` — use this file to summerise changes made
 
 ## World asset pipeline
 
@@ -101,9 +99,9 @@ attributes.
 
 ## Texture atlas
 
-- One 1024×1024 RGBA4444 atlas, 128×128 tiles, 8×8 grid.
-- Tile (0,0) is reserved grey fallback. 60 of the 63 remaining slots are used;
-  adding new textures can overflow the grid.
+- One 1024×1024 RGBA4444 atlas, 32×32 tiles, 32×32 grid.
+- Tile (0,0) is reserved grey fallback, leaving 1,023 texture slots. The
+  smaller tiles let the full-world material set fit in the 3DS texture limit.
 - Each tile has a 1-texel inset; wrapping is `CLAMP_TO_EDGE`, so source UVs
   outside `[0,1]` cannot be repeated. `fit_part_uvs()` fits each part's UV
   range into its tile, which makes very large tiled surfaces look soft.
@@ -166,7 +164,7 @@ frames are not mistaken for the new run.
   original instanced prop transforms are not decoded.
 - The real Porsche BNDL mesh is not decoded; the car is procedural geometry.
 - Only `ARENA_527911.BNDL` is extracted (radius 750 m, clipped to 650 m).
-  Streamed `TRK_UNIT*` set-pieces are absent.
+  Streamed `TRK_UNIT*` set-pieces are absent. 
 - Per-part UV fitting sacrifices tiling detail on large surfaces.
 - `nfs_3ds.3dsx`, `nfs_3ds.cia`, `*.mwmesh` and `*.t3x` are generated
   artifacts; do not treat diffs in them as source changes.
