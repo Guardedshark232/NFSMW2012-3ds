@@ -13,6 +13,9 @@ import struct
 import math
 import glob
 import time
+import pickle
+import gc
+from collections import OrderedDict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bndl import Bundle
@@ -28,24 +31,107 @@ SECTOR_SIZE = 500.0
 MAX_VERTS_PER_CHUNK = 30000
 
 
-def collect_sector_parts(bundle_paths, origin, slot_of):
-    """Collect renderables from all bundles and assign to grid sectors."""
+def collect_sector_parts(bundle_paths, origin, slot_of, spool_dir=None):
+    """Collect direct and placed renderables, emitting compact sector parts."""
     ox, oy, oz = origin
     seen_ids = set()
+    seen_instances = set()
 
     # Step 1: Scan and group mesh candidates by spatial sector
     print(f"Scanning {len(bundle_paths)} bundles across the full open world...")
-    sector_meshes = {}
+    sectors = {} if spool_dir is None else None
+    spool_handles = {}
+    sector_keys = set()
     total_scanned = 0
+    total_placed = 0
+    total_kept = 0
+    total_parts = 0
     t0 = time.time()
 
     for bi, bpath in enumerate(bundle_paths):
         bname = os.path.basename(bpath)
         b = Bundle(bpath)
-        rends = [r for r in b.resources if r.type_id == 5 and r.has_stream1]
-        b_accepted = 0
+        bundle_sector_meshes = {}
+        by_id = {r.id: r for r in b.resources}
+        renderables = {r.id: r for r in b.resources
+                       if r.type_id == 5 and r.has_stream1}
+        wrappers = {r.id: r for r in b.resources if r.type_id == 81}
+        wrapper_geometries = {}
+        placed_geometry_ids = set()
 
-        for r in rends:
+        # Type-81 placement wrappers reference one or more type-5 mesh
+        # resources. Most TRK_UNIT geometry is stored around (0, 0, 0) and
+        # only becomes world geometry after its type-80 transform is applied.
+        for wid, wrapper in wrappers.items():
+            d0 = b.stream0(wrapper)
+            refs = []
+            for off in range(0, len(d0) - 7, 8):
+                rid = struct.unpack_from("<Q", d0, off)[0]
+                if rid in renderables and rid not in refs:
+                    refs.append(rid)
+            if refs:
+                wrapper_geometries[wid] = refs
+
+        mesh_cache = OrderedDict()
+        for parent in (r for r in b.resources if r.type_id == 80):
+            d0 = b.stream0(parent)
+            for off in range(0, len(d0) - 15, 8):
+                wid = struct.unpack_from("<Q", d0, off)[0]
+                geometry_ids = wrapper_geometries.get(wid)
+                if not geometry_ids:
+                    continue
+                transform_off = struct.unpack_from("<Q", d0, off + 8)[0]
+                if (transform_off < 16 or (transform_off - 16) % 96 != 0
+                        or transform_off + 96 > len(d0)):
+                    continue
+
+                # Type-80 stores three basis vectors and a translation as
+                # four float4s beginning 32 bytes into each 96-byte record.
+                basis = [struct.unpack_from("<3f", d0, transform_off + k)
+                         for k in (32, 48, 64)]
+                translation = struct.unpack_from("<3f", d0, transform_off + 80)
+                if not all(math.isfinite(v) and abs(v) < 100000.0
+                           for row in basis for v in row) or not all(
+                               math.isfinite(v) and abs(v) < 100000.0
+                               for v in translation):
+                    continue
+
+                # Bundles repeat identical placements in streaming copies.
+                # Keep one exact geometry/transform combination, while still
+                # allowing the same local mesh at different world positions.
+                key = (tuple(geometry_ids),
+                       tuple(round(v, 4) for row in basis for v in row),
+                       tuple(round(v, 3) for v in translation))
+                if key in seen_instances:
+                    continue
+                seen_instances.add(key)
+                placed_geometry_ids.update(geometry_ids)
+
+                for rid in geometry_ids:
+                    if rid in mesh_cache:
+                        template = mesh_cache.pop(rid)
+                        mesh_cache[rid] = template
+                    else:
+                        template = extract_mesh(renderables[rid], b)
+                        mesh_cache[rid] = template
+                        if len(mesh_cache) > 128:
+                            mesh_cache.popitem(last=False)
+                    if not template:
+                        continue
+                    m = transform_mesh(template, basis, translation)
+                    if not m:
+                        continue
+                    cx, _, cz = m["centre"]
+                    gx = int(math.floor((cx - ox) / SECTOR_SIZE))
+                    gz = int(math.floor((cz - oz) / SECTOR_SIZE))
+                    bundle_sector_meshes.setdefault((gx, gz), []).append(m)
+                    total_placed += 1
+
+        # Some bundles also contain complete world-space renderables which
+        # need no instance transform.
+        for r in renderables.values():
+            if r.id in placed_geometry_ids:
+                continue
             if r.id in seen_ids:
                 continue
             p = parse_renderable(r, b)
@@ -65,34 +151,113 @@ def collect_sector_parts(bundle_paths, origin, slot_of):
 
             seen_ids.add(r.id)
             total_scanned += 1
-            b_accepted += 1
 
             lx = cx - ox
             lz = cz - oz
             gx = int(math.floor(lx / SECTOR_SIZE))
             gz = int(math.floor(lz / SECTOR_SIZE))
             key = (gx, gz)
-            sector_meshes.setdefault(key, []).append(m)
+            bundle_sector_meshes.setdefault(key, []).append(m)
+
+        # LOD copies mostly live in the same bundle. Deduplicate them before
+        # writing compact triangle partitions to disk, keeping RAM bounded as
+        # thousands of instanced set pieces are expanded.
+        def emit(sector_key, part):
+            sector_keys.add(sector_key)
+            if sectors is not None:
+                sectors.setdefault(sector_key, []).append(part)
+                return
+            handle = spool_handles.get(sector_key)
+            if handle is None:
+                gx, gz = sector_key
+                path = os.path.join(spool_dir, f"parts_{gx}_{gz}.pkl")
+                handle = open(path, "wb")
+                spool_handles[sector_key] = handle
+            pickle.dump(part, handle, protocol=4)
+
+        for m_list in bundle_sector_meshes.values():
+            kept = dedupe_lod_resources(m_list, verbose=False)
+            total_kept += len(kept)
+            for mesh in kept:
+                for part in mesh["parts"]:
+                    if not part["tris"]:
+                        continue
+                    for target_key, target_part in split_part_by_sector(part, origin):
+                        emit(target_key, target_part)
+                        total_parts += 1
+
+        del bundle_sector_meshes, mesh_cache, b, by_id, renderables, wrappers
+        if (bi + 1) % 25 == 0:
+            gc.collect()
 
         if (bi + 1) % 25 == 0 or (bi + 1) == len(bundle_paths):
-            print(f"  [{bi+1:3d}/{len(bundle_paths):3d}] bundles scanned ({total_scanned} world meshes in {len(sector_meshes)} sectors, {time.time()-t0:.1f}s)")
+            print(f"  [{bi+1:3d}/{len(bundle_paths):3d}] bundles scanned ({total_scanned} direct meshes, {total_placed} placed meshes -> {total_kept} after LOD filter, {len(sector_keys)} output sectors, {time.time()-t0:.1f}s)")
 
-    print(f"\nDeduplicating LOD clusters across {len(sector_meshes)} spatial sectors...")
-    sectors = {}
-    total_parts = 0
-    total_deduped_meshes = 0
-
-    for key, m_list in sector_meshes.items():
-        kept = dedupe_lod_resources(m_list)
-        total_deduped_meshes += len(kept)
-        for m in kept:
-            for p in m["parts"]:
-                if p["tris"]:
-                    sectors.setdefault(key, []).append(p)
-                    total_parts += 1
-
-    print(f"LOD deduplication complete: {total_scanned} -> {total_deduped_meshes} meshes (kept {total_parts} parts across {len(sectors)} sectors)")
+    for handle in spool_handles.values():
+        handle.close()
+    print(f"Mesh collection complete: {total_scanned} direct meshes, {total_placed} placed meshes -> {total_kept} after LOD filtering, {total_parts} sector parts, {len(sector_keys)} output sectors")
     return sectors
+
+
+def transform_mesh(mesh, basis, translation):
+    """Transform one decoded local mesh into its placed world coordinates."""
+    def apply(v):
+        x, y, z = v
+        return tuple(translation[k] + basis[0][k] * x + basis[1][k] * y + basis[2][k] * z
+                     for k in range(3))
+
+    parts = []
+    all_verts = []
+    for part in mesh["parts"]:
+        verts = [apply(v) for v in part["verts"]]
+        all_verts.extend(verts)
+        transformed = dict(part)
+        transformed["verts"] = verts
+        parts.append(transformed)
+    if not all_verts:
+        return None
+    centre = apply(mesh["centre"])
+    basis_scale = max(math.sqrt(sum(v * v for v in axis)) for axis in basis)
+    return dict(centre=centre, radius=mesh["radius"] * basis_scale,
+                bbox_min=tuple(min(v[k] for v in all_verts) for k in range(3)),
+                bbox_max=tuple(max(v[k] for v in all_verts) for k in range(3)),
+                parts=parts)
+
+
+def split_part_by_sector(part, origin):
+    """Partition a world-space mesh part by triangle centroid into 500m cells."""
+    ox, _, oz = origin
+    verts, uvs = part["verts"], part["uvs"]
+    grouped = {}
+    for tri in part["tris"]:
+        a, b, c = tri
+        ax, _, az = verts[a]
+        bx, _, bz = verts[b]
+        cx, _, cz = verts[c]
+        gx = int(math.floor((((ax + bx + cx) / 3.0) - ox) / SECTOR_SIZE))
+        gz = int(math.floor((((az + bz + cz) / 3.0) - oz) / SECTOR_SIZE))
+        key = (gx, gz)
+        if key not in grouped:
+            grouped[key] = {"verts": [], "uvs": [], "tris": [], "vertex_map": {}}
+        dst = grouped[key]
+        remapped = []
+        for src in tri:
+            vi = dst["vertex_map"].get(src)
+            if vi is None:
+                vi = len(dst["verts"])
+                dst["vertex_map"][src] = vi
+                dst["verts"].append(verts[src])
+                dst["uvs"].append(uvs[src])
+            remapped.append(vi)
+        dst["tris"].append(tuple(remapped))
+
+    result = []
+    for key, data in grouped.items():
+        del data["vertex_map"]
+        split_part = dict(part)
+        split_part.update(data)
+        result.append((key, split_part))
+    return result
 
 
 def build_and_save_sectors(sectors, origin, slot_of, out_dir):
@@ -102,16 +267,36 @@ def build_and_save_sectors(sectors, origin, slot_of, out_dir):
     yard_dec = make_yard_decorator(origin)
 
     sector_records = []
-    tot_sectors = len(sectors)
+    is_spooled = isinstance(sectors, (str, bytes, os.PathLike))
+    if is_spooled:
+        spool_dir = os.fspath(sectors)
+        spool_paths = glob.glob(os.path.join(spool_dir, "parts_*.pkl"))
+        sorted_keys = []
+        for path in spool_paths:
+            name = os.path.basename(path)[6:-4]
+            gx, gz = (int(v) for v in name.split("_", 1))
+            sorted_keys.append((gx, gz))
+        sorted_keys.sort()
+    else:
+        sorted_keys = sorted(sectors.keys())
+    tot_sectors = len(sorted_keys)
     total_verts = 0
     total_indices = 0
     total_bytes = 0
 
     print(f"\nProcessing and welding geometry for {tot_sectors} sectors...")
-    sorted_keys = sorted(sectors.keys(), key=lambda k: (k[0], k[1]))
-
     for idx, (gx, gz) in enumerate(sorted_keys):
-        parts = sectors[(gx, gz)]
+        if is_spooled:
+            path = os.path.join(spool_dir, f"parts_{gx}_{gz}.pkl")
+            parts = []
+            with open(path, "rb") as pf:
+                while True:
+                    try:
+                        parts.append(pickle.load(pf))
+                    except EOFError:
+                        break
+        else:
+            parts = sectors[(gx, gz)]
         # If this sector covers the container harbour yard around (-176, -139), apply yard decorator
         if gx == -1 and gz == -1:
             print(f"  Applying yard dressing to Harbour Sector ({gx}, {gz})...")
@@ -187,6 +372,13 @@ def build_and_save_sectors(sectors, origin, slot_of, out_dir):
                                  r["num_chunks"], r["num_verts"], r["num_indices"],
                                  fn_bytes))
 
+    # Old generated sectors are not referenced by the new manifest. Remove
+    # them so the embedded RomFS does not carry obsolete duplicate world data.
+    referenced = {r["filename"] for r in sector_records}
+    for path in glob.glob(os.path.join(out_dir, "sec_*.mwmesh")):
+        if os.path.basename(path) not in referenced:
+            os.remove(path)
+
     print(f"\nWrote World Manifest: {manifest_path} ({len(sector_records)} sectors, {os.path.getsize(manifest_path)} bytes)")
     print(f"Summary: {len(sector_records)} sectors, {total_verts} verts, {total_indices//3} triangles, {total_bytes / (1024*1024):.2f} MB on disk")
     return sector_records
@@ -207,8 +399,10 @@ def main():
         glob.glob(os.path.join(MW_DIR, "TRK_UNIT*.BNDL"))
     )
 
-    sectors = collect_sector_parts(all_bundles, ORIGIN, slot_of)
-    records = build_and_save_sectors(sectors, ORIGIN, slot_of, out_dir)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="mw_world_parts_") as spool_dir:
+        collect_sector_parts(all_bundles, ORIGIN, slot_of, spool_dir)
+        records = build_and_save_sectors(spool_dir, ORIGIN, slot_of, out_dir)
 
 
 if __name__ == "__main__":

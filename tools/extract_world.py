@@ -205,7 +205,8 @@ def _containment_fraction(small_keys, big_keys, max_sample=2000):
     return hits / len(sample)
 
 
-def dedupe_lod_resources(meshes, min_containment=0.6, max_centre_distance=60.0):
+def dedupe_lod_resources(meshes, min_containment=0.6, max_centre_distance=60.0,
+                         verbose=True):
     """Keep one renderable per LOD/duplicate cluster.
 
     Chameleon bundles contain several detail levels (and sometimes exact
@@ -258,9 +259,10 @@ def dedupe_lod_resources(meshes, min_containment=0.6, max_centre_distance=60.0):
     kept = [it["mesh"] for it in winners]
     total_tris = sum(it["tris"] for it in items)
     kept_tris = sum(it["tris"] for it in winners)
-    print(f"LOD dedupe: {len(meshes)} renderables -> {len(kept)} "
-          f"(dropped {len(meshes) - len(kept)} LOD copies); "
-          f"dropped {(total_tris - kept_tris) // 3} duplicate tris")
+    if verbose:
+        print(f"LOD dedupe: {len(meshes)} renderables -> {len(kept)} "
+              f"(dropped {len(meshes) - len(kept)} LOD copies); "
+              f"dropped {(total_tris - kept_tris) // 3} duplicate tris")
     return kept
 
 

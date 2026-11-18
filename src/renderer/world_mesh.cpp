@@ -105,6 +105,7 @@ static const int   FALLBACK_GROUND_DIM = 321;
 // Streaming Radii
 static const float STREAM_LOAD_DIST   = 650.0f; // Load sectors within 650m
 static const float STREAM_UNLOAD_DIST = 900.0f; // Unload sectors beyond 900m (250m hysteresis)
+static const float WORLD_DRAW_DIST    = 120.0f; // Keep the 3DS draw workload near the car
 static const size_t MIN_LINEAR_FREE_BUDGET = 2 * 1024 * 1024; // Keep at least 2 MB free
 
 // Forward declarations
@@ -125,6 +126,41 @@ static inline float aabb_distance_sq(float px, float pz, float min_x, float min_
     else if (pz > max_z) dz = pz - max_z;
 
     return dx * dx + dz * dz;
+}
+
+static size_t sector_gpu_bytes(const MWSectorRecord& rec) {
+    size_t vbytes = ((size_t)rec.num_verts * sizeof(MWVertex) + 15u) & ~(size_t)15u;
+    size_t ibytes = ((size_t)rec.num_indices * sizeof(uint16_t) + 15u) & ~(size_t)15u;
+    return vbytes + ibytes + (size_t)rec.num_chunks * 32u + MIN_LINEAR_FREE_BUDGET;
+}
+
+static bool chunk_outside_frustum(const C3D_Mtx& mvp, const WorldChunkMesh& ch) {
+    bool out_left = true, out_right = true;
+    bool out_bottom = true, out_top = true, behind = true;
+    for (int corner = 0; corner < 8; corner++) {
+        float x = (corner & 1) ? ch.bbox_max[0] : ch.bbox_min[0];
+        float y = (corner & 2) ? ch.bbox_max[1] : ch.bbox_min[1];
+        float z = (corner & 4) ? ch.bbox_max[2] : ch.bbox_min[2];
+        float cx = mvp.m[0] * x + mvp.m[1] * y + mvp.m[2] * z + mvp.m[3];
+        float cy = mvp.m[4] * x + mvp.m[5] * y + mvp.m[6] * z + mvp.m[7];
+        float cw = mvp.m[12] * x + mvp.m[13] * y + mvp.m[14] * z + mvp.m[15];
+        if (cx >= -cw) out_left = false;
+        if (cx <= cw) out_right = false;
+        if (cy >= -cw) out_bottom = false;
+        if (cy <= cw) out_top = false;
+        if (cw > 0.0f) behind = false;
+    }
+    return behind || out_left || out_right || out_bottom || out_top;
+}
+
+static bool chunk_too_far(const WorldChunkMesh& ch, float x, float z) {
+    float dx = 0.0f;
+    if (x < ch.bbox_min[0]) dx = ch.bbox_min[0] - x;
+    else if (x > ch.bbox_max[0]) dx = x - ch.bbox_max[0];
+    float dz = 0.0f;
+    if (z < ch.bbox_min[2]) dz = ch.bbox_min[2] - z;
+    else if (z > ch.bbox_max[2]) dz = z - ch.bbox_max[2];
+    return dx * dx + dz * dz > WORLD_DRAW_DIST * WORLD_DRAW_DIST;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,9 +575,15 @@ static void update_streaming(float car_x, float car_z) {
         return a.d2 < b.d2;
     });
 
-    // Budget: Load at most 1 sector per frame to eliminate stutter while driving fast
-    if (!to_load.empty() && linearSpaceFree() >= MIN_LINEAR_FREE_BUDGET) {
-        load_sector(g_manifest_sectors[to_load[0].index]);
+    // Budget: load at most one sector per frame, and only when its full
+    // vertex/index buffers fit. Do not evict a resident sector just to load
+    // the next candidate: that candidate would become the next missing one
+    // and make the streamer alternate between sectors every frame.
+    for (const Candidate& candidate : to_load) {
+        const MWSectorRecord& target = g_manifest_sectors[candidate.index];
+        if (linearSpaceFree() < sector_gpu_bytes(target)) continue;
+        load_sector(target);
+        break;
     }
 }
 
@@ -674,6 +716,7 @@ void world_mesh_render(const C3D_Mtx* projection, const C3D_Mtx* view, float car
         for (const auto& sec : g_loaded_sectors) {
             for (const auto& ch : sec.chunks) {
                 if (!ch.vbo || !ch.ibo || ch.num_indices == 0) continue;
+                if (chunk_too_far(ch, car_x, car_z) || chunk_outside_frustum(mvp, ch)) continue;
 
                 C3D_BufInfo* bufInfo = C3D_GetBufInfo();
                 BufInfo_Init(bufInfo);

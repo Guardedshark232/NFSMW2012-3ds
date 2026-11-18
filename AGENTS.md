@@ -10,8 +10,9 @@ citro3d and citro2d. It renders extracted world geometry from the retail PC
 game (RomFS assets), drives a car with a chase camera, and draws an EasyDrive
 HUD on the bottom screen.
 
-The playable world is a single extracted arena (`ARENA_527911.BNDL`) plus
-hand-authored container-yard dressing. It is not the full game.
+The streamed world is extracted from the 8 arena bundles, district bundles,
+and `TRK_UNIT*` set-piece bundles, plus hand-authored container-yard dressing.
+Some retail resource types may still be undecoded.
 
 ## Build
 
@@ -161,10 +162,10 @@ frames are not mistaken for the new run.
 ## Known limitations
 
 - Container stacks and gantry cranes are procedural and hand-placed; the
-  original instanced prop transforms are not decoded.
+  original harbour prop transforms are not decoded.
 - The real Porsche BNDL mesh is not decoded; the car is procedural geometry.
-- Only `ARENA_527911.BNDL` is extracted (radius 750 m, clipped to 650 m).
-  Streamed `TRK_UNIT*` set-pieces are absent. 
+- The world extractor handles direct renderables and type-80/type-81 placed
+  renderables. Other resource types may still hold missing set pieces.
 - Per-part UV fitting sacrifices tiling detail on large surfaces.
 - `nfs_3ds.3dsx`, `nfs_3ds.cia`, `*.mwmesh` and `*.t3x` are generated
   artifacts; do not treat diffs in them as source changes.
