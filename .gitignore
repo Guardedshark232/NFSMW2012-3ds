@@ -2,6 +2,7 @@
 session-*.md
 *.kate-swp
 .opencode/
+.wine/
 
 # Build outputs and compiled 3DS binaries
 build/
