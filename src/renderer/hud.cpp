@@ -19,10 +19,30 @@ static const float kRadarX = 222.5f;
 static const float kRadarY = 36.0f;
 
 static C2D_TextBuf g_staticBuf = NULL;
+static C2D_TextBuf g_dynamicBuf = NULL;
+static C2D_TextBuf g_easyBuf = NULL;
 static C2D_Font g_font = NULL;
+static C2D_Text g_staticText[6];
+static C2D_Text g_dynamicText[6];
+static unsigned int g_hudFrame = 0;
+static bool g_dynamicReady = false;
+static bool g_cachedDrifting = false;
+
+enum StaticText {
+    STATIC_HEADER,
+    STATIC_KMH,
+    STATIC_FAIRHAVEN,
+    STATIC_RADAR,
+    STATIC_CAR_LINE,
+    STATIC_CONTROL_LINE,
+};
 
 void hud_init(void) {
+    g_dynamicReady = false;
+    g_hudFrame = 0;
     g_staticBuf = C2D_TextBufNew(4096);
+    g_dynamicBuf = C2D_TextBufNew(1024);
+    g_easyBuf = C2D_TextBufNew(1024);
 
     // Load bundled UI font from RomFS (never crashes if system font is missing)
     g_font = C2D_FontLoad("romfs:/assets/helvetica.bcfnt");
@@ -31,6 +51,20 @@ void hud_init(void) {
     }
     if (!g_font) {
         g_font = C2D_FontLoadSystem(CFG_REGION_USA);
+    }
+
+    static const char* labels[6] = {
+        "NFS: MOST WANTED (2012) - FAIRHAVEN 3DS",
+        "km/h",
+        "FAIRHAVEN",
+        "RADAR MAP",
+        "Porsche 911 Carrera S (2012)  |  Fairhaven City",
+        "A Drive | B Brake / Reverse | START Menu | SELECT Reset",
+    };
+    for (int i = 0; g_staticBuf && i < 6; i++) {
+        if (g_font) C2D_TextFontParse(&g_staticText[i], g_font, g_staticBuf, labels[i]);
+        else C2D_TextParse(&g_staticText[i], g_staticBuf, labels[i]);
+        C2D_TextOptimize(&g_staticText[i]);
     }
 }
 
@@ -43,18 +77,28 @@ void hud_exit(void) {
         C2D_TextBufDelete(g_staticBuf);
         g_staticBuf = NULL;
     }
+    if (g_dynamicBuf) { C2D_TextBufDelete(g_dynamicBuf); g_dynamicBuf = NULL; }
+    if (g_easyBuf) { C2D_TextBufDelete(g_easyBuf); g_easyBuf = NULL; }
 }
 
-static inline void draw_string(const char* str, float x, float y, float scaleX, float scaleY, u32 color) {
-    if (!g_staticBuf || !str || !str[0]) return;
+static inline void parse_cached(C2D_Text* text, C2D_TextBuf buf, const char* str) {
+    if (g_font) C2D_TextFontParse(text, g_font, buf, str);
+    else C2D_TextParse(text, buf, str);
+    C2D_TextOptimize(text);
+}
+
+static inline void draw_cached(const C2D_Text* text, float x, float y,
+                               float scaleX, float scaleY, u32 color) {
+    if (!g_staticBuf || !g_dynamicBuf || !text) return;
+    C2D_DrawText(text, C2D_WithColor, x, y, 0.5f, scaleX, scaleY, color);
+}
+
+static inline void draw_string(const char* str, float x, float y,
+                               float scaleX, float scaleY, u32 color) {
+    if (!g_easyBuf || !str || !str[0]) return;
     C2D_Text text;
-    if (g_font) {
-        C2D_TextFontParse(&text, g_font, g_staticBuf, str);
-    } else {
-        C2D_TextParse(&text, g_staticBuf, str);
-    }
-    C2D_TextOptimize(&text);
-    C2D_DrawText(&text, C2D_WithColor, x, y, 0.5f, scaleX, scaleY, color);
+    parse_cached(&text, g_easyBuf, str);
+    draw_cached(&text, x, y, scaleX, scaleY, color);
 }
 
 void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyDriveOpen, int easyDriveSelection, bool bndl_opened, uint32_t bndl_entries, float fps) {
@@ -64,12 +108,42 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
     C2D_TargetClear(target, C2D_Color32(14, 18, 28, 255));
     C2D_SceneBegin(target);
 
-    C2D_TextBufClear(g_staticBuf);
+    g_hudFrame++;
+    bool refreshText = !g_dynamicReady || ((g_hudFrame & 1u) == 0);
+    if (easyDriveOpen && g_easyBuf) C2D_TextBufClear(g_easyBuf);
+    if (refreshText && g_dynamicBuf) {
+        C2D_TextBufClear(g_dynamicBuf);
+        char text[160];
+        snprintf(text, sizeof(text), "%5.1f", car->speed);
+        parse_cached(&g_dynamicText[0], g_dynamicBuf, text);
+        if (car->reversing) snprintf(text, sizeof(text), "GEAR R   |   %4.0f RPM", car->rpm);
+        else snprintf(text, sizeof(text), "GEAR %d   |   %4.0f RPM", car->gear, car->rpm);
+        parse_cached(&g_dynamicText[1], g_dynamicBuf, text);
+        snprintf(text, sizeof(text), "NITROUS %3.0f%%", car->nitrous_level * 100.0f);
+        parse_cached(&g_dynamicText[2], g_dynamicBuf, text);
+        g_cachedDrifting = car->is_drifting;
+        if (g_cachedDrifting) {
+            snprintf(text, sizeof(text), ">> POWER-SLIDE DRIFT ACTIVE! Angle: %4.1f deg <<", car->drift_angle * 57.3f);
+        } else {
+            snprintf(text, sizeof(text), "Distance: %6.1f m   |   Perf: %4.1f FPS (%4.1f ms)",
+                     car->distance, fps, 1000.0f / (fps > 0 ? fps : 60.0f));
+        }
+        parse_cached(&g_dynamicText[3], g_dynamicBuf, text);
+        if (bndl_opened) snprintf(text, sizeof(text), "CHAMELEON 2: WORLDLIST.BNDL (%lu chunks loaded)", (unsigned long)bndl_entries);
+        else snprintf(text, sizeof(text), "CHAMELEON 2: SD / RomFS Streaming Ready");
+        parse_cached(&g_dynamicText[4], g_dynamicBuf, text);
+        snprintf(text, sizeof(text), "POS %6.1f %6.1f  GND %6.2f  CAM %6.2f  CH %d/%d",
+                 car->pos_x, car->pos_z,
+                 renderer_debug_car_y(), renderer_debug_cam_y(),
+                 world_mesh_chunk_count(), world_mesh_chunk_total());
+        parse_cached(&g_dynamicText[5], g_dynamicBuf, text);
+        g_dynamicReady = true;
+    }
 
     // 1. Top Header Banner
     C2D_DrawRectSolid(0, 0, 0, 320, 24, C2D_Color32(20, 25, 38, 255));
     C2D_DrawRectSolid(0, 24, 0, 320, 2, C2D_Color32(0, 200, 255, 255));
-    draw_string("NFS: MOST WANTED (2012) - FAIRHAVEN 3DS", 10.f, 4.f, 0.52f, 0.52f, C2D_Color32(255, 255, 255, 255));
+    draw_cached(&g_staticText[STATIC_HEADER], 10.f, 4.f, 0.52f, 0.52f, C2D_Color32(255, 255, 255, 255));
 
     // Porsche crest icon
     C2D_Image crestImg = assets_get_image("crest", 0);
@@ -81,18 +155,9 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
     C2D_DrawRectSolid(10, 34, 0, 185, 74, C2D_Color32(22, 28, 42, 230));
     C2D_DrawRectSolid(10, 34, 0, 185, 2, C2D_Color32(0, 180, 220, 255));
 
-    char speedBuf[64];
-    snprintf(speedBuf, sizeof(speedBuf), "%5.1f", car->speed);
-    draw_string(speedBuf, 16.f, 40.f, 0.95f, 0.95f, C2D_Color32(255, 255, 255, 255));
-    draw_string("km/h", 125.f, 52.f, 0.45f, 0.45f, C2D_Color32(0, 200, 255, 255));
-
-    char gearBuf[64];
-    if (car->reversing) {
-        snprintf(gearBuf, sizeof(gearBuf), "GEAR R   |   %4.0f RPM", car->rpm);
-    } else {
-        snprintf(gearBuf, sizeof(gearBuf), "GEAR %d   |   %4.0f RPM", car->gear, car->rpm);
-    }
-    draw_string(gearBuf, 16.f, 80.f, 0.48f, 0.48f, C2D_Color32(0, 220, 255, 255));
+    draw_cached(&g_dynamicText[0], 16.f, 40.f, 0.95f, 0.95f, C2D_Color32(255, 255, 255, 255));
+    draw_cached(&g_staticText[STATIC_KMH], 125.f, 52.f, 0.45f, 0.45f, C2D_Color32(0, 200, 255, 255));
+    draw_cached(&g_dynamicText[1], 16.f, 80.f, 0.48f, 0.48f, C2D_Color32(0, 220, 255, 255));
 
     // Minimap / Radar Preview (Top-Right)
     C2D_DrawRectSolid(205, 34, 0, 105, 74, C2D_Color32(22, 28, 42, 230));
@@ -124,14 +189,14 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
 
         float cx = kRadarX + kRadarPx * 0.5f;
         float cy = kRadarY + kRadarPx * 0.5f;
-        float fx = -sinf(car->heading);
-        float fz = -cosf(car->heading);
+        float fx = car->forward_x;
+        float fz = car->forward_z;
         u32 marker = C2D_Color32(255, 214, 40, 255);
         C2D_DrawLine(cx, cy, marker, cx + fx * 8.0f, cy + fz * 8.0f, marker, 1.5f, 0.5f);
         C2D_DrawCircleSolid(cx, cy, 0.5f, 2.5f, marker);
     } else {
-        draw_string("FAIRHAVEN", 218.f, 48.f, 0.45f, 0.45f, C2D_Color32(0, 200, 255, 255));
-        draw_string("RADAR MAP", 218.f, 68.f, 0.40f, 0.40f, C2D_Color32(180, 200, 220, 255));
+        draw_cached(&g_staticText[STATIC_FAIRHAVEN], 218.f, 48.f, 0.45f, 0.45f, C2D_Color32(0, 200, 255, 255));
+        draw_cached(&g_staticText[STATIC_RADAR], 218.f, 68.f, 0.40f, 0.40f, C2D_Color32(180, 200, 220, 255));
     }
 
     // 3. Signature Nitrous Bar
@@ -143,40 +208,18 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
     if (nitroW > 0.0f) {
         C2D_DrawRectSolid(95, 126, 0, nitroW, 8, car->nitrous_active ? C2D_Color32(255, 90, 40, 255) : C2D_Color32(0, 220, 255, 255));
     }
-    char nitroBuf[32];
-    snprintf(nitroBuf, sizeof(nitroBuf), "NITROUS %3.0f%%", car->nitrous_level * 100.0f);
-    draw_string(nitroBuf, 16.f, 122.f, 0.42f, 0.42f, car->nitrous_active ? C2D_Color32(255, 100, 50, 255) : C2D_Color32(0, 220, 255, 255));
+    draw_cached(&g_dynamicText[2], 16.f, 122.f, 0.42f, 0.42f, car->nitrous_active ? C2D_Color32(255, 100, 50, 255) : C2D_Color32(0, 220, 255, 255));
 
     // 4. Telemetry & Chameleon BND2 Status Panel
     C2D_DrawRectSolid(10, 152, 0, 300, 78, C2D_Color32(22, 28, 42, 230));
 
-    char driftBuf[128];
-    if (car->is_drifting) {
-        snprintf(driftBuf, sizeof(driftBuf), ">> POWER-SLIDE DRIFT ACTIVE! Angle: %4.1f deg <<", car->drift_angle * 57.3f);
-        draw_string(driftBuf, 16.f, 158.f, 0.44f, 0.44f, C2D_Color32(255, 220, 0, 255));
-    } else {
-        snprintf(driftBuf, sizeof(driftBuf), "Distance: %6.1f m   |   Perf: %4.1f FPS (%4.1f ms)", car->distance, fps, 1000.0f / (fps > 0 ? fps : 60.0f));
-        draw_string(driftBuf, 16.f, 158.f, 0.44f, 0.44f, C2D_Color32(180, 200, 220, 255));
-    }
-
-    char bndlBuf[128];
-    if (bndl_opened) {
-        snprintf(bndlBuf, sizeof(bndlBuf), "CHAMELEON 2: WORLDLIST.BNDL (%lu chunks loaded)", (unsigned long)bndl_entries);
-        draw_string(bndlBuf, 16.f, 178.f, 0.42f, 0.42f, C2D_Color32(0, 220, 120, 255));
-    } else {
-        draw_string("CHAMELEON 2: SD / RomFS Streaming Ready", 16.f, 178.f, 0.42f, 0.42f, C2D_Color32(100, 180, 220, 255));
-    }
-
-    draw_string("Porsche 911 Carrera S (2012)  |  Fairhaven City", 16.f, 192.f, 0.40f, 0.40f, C2D_Color32(240, 200, 40, 255));
-    draw_string("A Drive | B Brake / Reverse | START Menu | SELECT Reset", 16.f, 206.f, 0.36f, 0.36f, C2D_Color32(140, 160, 180, 255));
-
-    // Live world telemetry: makes ground/camera faults visible on hardware.
-    char dbgBuf[128];
-    snprintf(dbgBuf, sizeof(dbgBuf), "POS %6.1f %6.1f  GND %6.2f  CAM %6.2f  CH %d/%d",
-             car->pos_x, car->pos_z,
-             renderer_debug_car_y(), renderer_debug_cam_y(),
-             world_mesh_chunk_count(), world_mesh_chunk_total());
-    draw_string(dbgBuf, 14.f, 222.f, 0.34f, 0.34f, C2D_Color32(120, 210, 160, 255));
+    draw_cached(&g_dynamicText[3], 16.f, 158.f, 0.44f, 0.44f,
+                g_cachedDrifting ? C2D_Color32(255, 220, 0, 255) : C2D_Color32(180, 200, 220, 255));
+    draw_cached(&g_dynamicText[4], 16.f, 178.f, 0.42f, 0.42f,
+                bndl_opened ? C2D_Color32(0, 220, 120, 255) : C2D_Color32(100, 180, 220, 255));
+    draw_cached(&g_staticText[STATIC_CAR_LINE], 16.f, 192.f, 0.40f, 0.40f, C2D_Color32(240, 200, 40, 255));
+    draw_cached(&g_staticText[STATIC_CONTROL_LINE], 16.f, 206.f, 0.36f, 0.36f, C2D_Color32(140, 160, 180, 255));
+    draw_cached(&g_dynamicText[5], 14.f, 222.f, 0.34f, 0.34f, C2D_Color32(120, 210, 160, 255));
 
     // 5. EasyDrive Overlay
     if (easyDriveOpen) {

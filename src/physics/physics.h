@@ -11,6 +11,8 @@ typedef struct {
     float steering_angle;   // Steering wheel angle (-1.0 left to 1.0 right)
     float distance;         // Total distance traveled (meters)
     float heading;          // Heading yaw angle (radians)
+    float forward_x;        // Cached heading direction for rendering and HUD
+    float forward_z;
     float pos_x;            // World X position (metres)
     float pos_y;            // Ground height (metres)
     float pos_z;            // World Z position (metres)

@@ -19,6 +19,8 @@ void physics_init(void) {
     // quay road: buildings and containers on both sides, continuous ground
     // for well over 100 m, and open sky above the skyline.
     g_car.heading = 0.7853982f; // 45 degrees
+    g_car.forward_x = -0.7071068f;
+    g_car.forward_z = -0.7071068f;
     g_car.pos_x = -148.0f;
     g_car.pos_y = 0.0f;
     g_car.pos_z = 164.0f;
@@ -126,10 +128,14 @@ void physics_update(float dt, float throttle, float brake, float steering, bool 
 
     // Forward and lateral motion
     // heading 0 faces -Z; positive heading turns left.
-    float fwd_x = -sinf(g_car.heading);
-    float fwd_z = -cosf(g_car.heading);
-    float right_x = cosf(g_car.heading);
-    float right_z = -sinf(g_car.heading);
+    float heading_sin = sinf(g_car.heading);
+    float heading_cos = cosf(g_car.heading);
+    float fwd_x = -heading_sin;
+    float fwd_z = -heading_cos;
+    g_car.forward_x = fwd_x;
+    g_car.forward_z = fwd_z;
+    float right_x = heading_cos;
+    float right_z = -heading_sin;
 
     g_car.pos_x += fwd_x * speed_ms * dt * motion_dir;
     g_car.pos_z += fwd_z * speed_ms * dt * motion_dir;

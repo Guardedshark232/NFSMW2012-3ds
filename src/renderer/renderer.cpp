@@ -500,7 +500,9 @@ void renderer_render_world_and_car(float dt) {
         // keeps the previous (untextured) combiner for the world draw.
         C3D_DirtyTexEnv(env);
     }
-    world_mesh_render(&projection, &camera, car->pos_x, car->pos_z);
+    float stream_x = car->reversing ? -car->forward_x : car->forward_x;
+    float stream_z = car->reversing ? -car->forward_z : car->forward_z;
+    world_mesh_render(&projection, &camera, car->pos_x, car->pos_z, stream_x, stream_z);
     if (atlas) {
         C3D_TexEnvInit(env);
         C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);

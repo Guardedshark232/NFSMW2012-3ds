@@ -29,6 +29,7 @@ from extract_world import (
 ORIGIN = (-168.0, 30.0, 4058.0)
 SECTOR_SIZE = 500.0
 MAX_VERTS_PER_CHUNK = 30000
+CHUNK_SPATIAL_SIZE = 125.0
 
 
 def collect_sector_parts(bundle_paths, origin, slot_of, spool_dir=None):
@@ -94,6 +95,11 @@ def collect_sector_parts(bundle_paths, origin, slot_of, spool_dir=None):
                            for row in basis for v in row) or not all(
                                math.isfinite(v) and abs(v) < 100000.0
                                for v in translation):
+                    continue
+                # Reject corrupt/false placement records. The audited game
+                # data has only two transforms above 20x; both expand small
+                # prop meshes into giant road-crossing geometry.
+                if max(math.sqrt(sum(v * v for v in axis)) for axis in basis) > 20.0:
                     continue
 
                 # Bundles repeat identical placements in streaming copies.
@@ -224,8 +230,8 @@ def transform_mesh(mesh, basis, translation):
                 parts=parts)
 
 
-def split_part_by_sector(part, origin):
-    """Partition a world-space mesh part by triangle centroid into 500m cells."""
+def split_part_by_sector(part, origin, cell_size=SECTOR_SIZE):
+    """Partition a world-space part by triangle centroid into spatial cells."""
     ox, _, oz = origin
     verts, uvs = part["verts"], part["uvs"]
     grouped = {}
@@ -234,8 +240,8 @@ def split_part_by_sector(part, origin):
         ax, _, az = verts[a]
         bx, _, bz = verts[b]
         cx, _, cz = verts[c]
-        gx = int(math.floor((((ax + bx + cx) / 3.0) - ox) / SECTOR_SIZE))
-        gz = int(math.floor((((az + bz + cz) / 3.0) - oz) / SECTOR_SIZE))
+        gx = int(math.floor((((ax + bx + cx) / 3.0) - ox) / cell_size))
+        gz = int(math.floor((((az + bz + cz) / 3.0) - oz) / cell_size))
         key = (gx, gz)
         if key not in grouped:
             grouped[key] = {"verts": [], "uvs": [], "tris": [], "vertex_map": {}}
@@ -303,18 +309,28 @@ def build_and_save_sectors(sectors, origin, slot_of, out_dir):
             extra = yard_dec(parts)
             parts = list(parts) + extra
 
-        # Pack into chunks with <= MAX_VERTS_PER_CHUNK
+        # Keep each runtime chunk spatially compact. Without this ordering,
+        # bundle-order parts from opposite sides of a 500m sector can share a
+        # chunk; its broad AABB then defeats runtime distance/frustum culling.
+        spatial_parts = []
+        for part in parts:
+            spatial_parts.extend(split_part_by_sector(part, origin, CHUNK_SPATIAL_SIZE))
+        spatial_parts.sort(key=lambda item: item[0])
+
+        # Pack one spatial cell at a time into chunks with <= MAX_VERTS_PER_CHUNK.
         chunks = []
         cur_parts = []
         cur_verts = 0
-        for p in parts:
+        cur_cell = None
+        for cell, p in spatial_parts:
             nv = len(p["verts"])
-            if cur_parts and cur_verts + nv > MAX_VERTS_PER_CHUNK:
+            if cur_parts and (cell != cur_cell or cur_verts + nv > MAX_VERTS_PER_CHUNK):
                 ch = build_indexed_chunk(cur_parts, ox, oy, oz, slot_of)
                 if ch["indices"]:
                     chunks.append(ch)
                 cur_parts = []
                 cur_verts = 0
+            cur_cell = cell
             cur_parts.append(p)
             cur_verts += nv
 

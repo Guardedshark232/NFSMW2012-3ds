@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <vector>
 #include <algorithm>
+#include <utility>
 
 // Packed vertex shared with the renderer: float position + lighting tint RGBA
 // + uint16 atlas UV.
@@ -87,13 +88,41 @@ struct LoadedSector {
     std::vector<uint8_t> wall_cells;
     std::vector<int16_t> wall_lo;
     std::vector<int16_t> wall_hi;
+    std::vector<size_t> ground_cursors;
+    size_t ground_scan_index;
     float last_dist_sq;
+};
+
+struct ChunkFileRecord {
+    long offset;
+    MWChunkHeader header;
+    float priority;
+};
+
+struct SectorLoadJob {
+    FILE* file;
+    LoadedSector sector;
+    std::vector<ChunkFileRecord> chunk_order;
+    std::vector<size_t> ground_cursors;
+    uint32_t total_chunks;
+    uint32_t chunks_loaded;
+    bool active;
+};
+
+struct StreamCandidate {
+    size_t index;
+    float priority;
 };
 
 // World Streaming State
 static bool g_streaming_mode = false;
 static std::vector<MWSectorRecord> g_manifest_sectors;
 static std::vector<LoadedSector> g_loaded_sectors;
+static std::vector<StreamCandidate> g_stream_candidates;
+static std::vector<MWVertex> g_load_verts;
+static std::vector<uint16_t> g_load_indices;
+static SectorLoadJob g_sector_load = {};
+static size_t g_ground_sector_index = 0;
 
 // Fallback monolithic chunks (if manifest not found)
 static std::vector<WorldChunkMesh> g_fallback_chunks;
@@ -105,16 +134,25 @@ static const int   FALLBACK_GROUND_DIM = 321;
 // Streaming Radii
 static const float STREAM_LOAD_DIST   = 650.0f; // Load sectors within 650m
 static const float STREAM_UNLOAD_DIST = 900.0f; // Unload sectors beyond 900m (250m hysteresis)
-static const float WORLD_DRAW_DIST    = 120.0f; // Keep the 3DS draw workload near the car
+static const float WORLD_DRAW_DIST    = 100.0f;
+static const uint32_t WORLD_TRIANGLE_BUDGET = 80000;
+static const size_t GROUND_TRIANGLES_PER_FRAME = 1024;
+static const u64 GROUND_BUILD_BUDGET_TICKS = (u64)(CPU_TICKS_PER_MSEC * 2.0);
 static const size_t MIN_LINEAR_FREE_BUDGET = 2 * 1024 * 1024; // Keep at least 2 MB free
 
 // Forward declarations
-static void sector_ground_build(LoadedSector& sec,
-                                const std::vector<MWVertex>& verts,
-                                const std::vector<uint16_t>& indices);
-static bool load_sector(const MWSectorRecord& rec);
+static size_t sector_ground_build(LoadedSector& sec,
+                                  const MWVertex* verts, size_t num_verts,
+                                  const uint16_t* indices, size_t num_indices,
+                                  size_t first_triangle, size_t end_triangle);
+static bool start_sector_load(const MWSectorRecord& rec,
+                              float car_x, float car_z,
+                              float forward_x, float forward_z);
+static bool continue_sector_load(void);
+static void update_resident_ground_build(void);
+static void cancel_sector_load(void);
 static void unload_sector(size_t index);
-static void update_streaming(float car_x, float car_z);
+static void update_streaming(float car_x, float car_z, float forward_x, float forward_z);
 
 static inline float aabb_distance_sq(float px, float pz, float min_x, float min_z, float max_x, float max_z) {
     float dx = 0.0f;
@@ -128,47 +166,76 @@ static inline float aabb_distance_sq(float px, float pz, float min_x, float min_
     return dx * dx + dz * dz;
 }
 
+static float stream_priority(float car_x, float car_z, float forward_x, float forward_z,
+                             float distance_sq, float forward_weight,
+                             float min_x, float min_z, float max_x, float max_z) {
+    float cx = (min_x + max_x) * 0.5f;
+    float cz = (min_z + max_z) * 0.5f;
+    float dx = cx - car_x;
+    float dz = cz - car_z;
+    float forward = dx * forward_x + dz * forward_z;
+    if (forward > 500.0f) forward = 500.0f;
+    if (forward < -500.0f) forward = -500.0f;
+    return distance_sq - forward * forward_weight;
+}
+
 static size_t sector_gpu_bytes(const MWSectorRecord& rec) {
     size_t vbytes = ((size_t)rec.num_verts * sizeof(MWVertex) + 15u) & ~(size_t)15u;
     size_t ibytes = ((size_t)rec.num_indices * sizeof(uint16_t) + 15u) & ~(size_t)15u;
     return vbytes + ibytes + (size_t)rec.num_chunks * 32u + MIN_LINEAR_FREE_BUDGET;
 }
 
-static bool chunk_outside_frustum(const C3D_Mtx& mvp, const WorldChunkMesh& ch) {
-    bool out_left = true, out_right = true;
-    bool out_bottom = true, out_top = true, behind = true;
-    for (int corner = 0; corner < 8; corner++) {
-        float x = (corner & 1) ? ch.bbox_max[0] : ch.bbox_min[0];
-        float y = (corner & 2) ? ch.bbox_max[1] : ch.bbox_min[1];
-        float z = (corner & 4) ? ch.bbox_max[2] : ch.bbox_min[2];
-        float cx = mvp.m[0] * x + mvp.m[1] * y + mvp.m[2] * z + mvp.m[3];
-        float cy = mvp.m[4] * x + mvp.m[5] * y + mvp.m[6] * z + mvp.m[7];
-        float cw = mvp.m[12] * x + mvp.m[13] * y + mvp.m[14] * z + mvp.m[15];
-        if (cx >= -cw) out_left = false;
-        if (cx <= cw) out_right = false;
-        if (cy >= -cw) out_bottom = false;
-        if (cy <= cw) out_top = false;
-        if (cw > 0.0f) behind = false;
-    }
-    return behind || out_left || out_right || out_bottom || out_top;
+static float aabb_plane_max(const float* axis, float bias, const WorldChunkMesh& ch) {
+    float x = (axis[0] >= 0.0f) ? ch.bbox_max[0] : ch.bbox_min[0];
+    float y = (axis[1] >= 0.0f) ? ch.bbox_max[1] : ch.bbox_min[1];
+    float z = (axis[2] >= 0.0f) ? ch.bbox_max[2] : ch.bbox_min[2];
+    return axis[0] * x + axis[1] * y + axis[2] * z + bias;
 }
 
-static bool chunk_too_far(const WorldChunkMesh& ch, float x, float z) {
-    float dx = 0.0f;
-    if (x < ch.bbox_min[0]) dx = ch.bbox_min[0] - x;
-    else if (x > ch.bbox_max[0]) dx = x - ch.bbox_max[0];
-    float dz = 0.0f;
-    if (z < ch.bbox_min[2]) dz = ch.bbox_min[2] - z;
-    else if (z > ch.bbox_max[2]) dz = z - ch.bbox_max[2];
-    return dx * dx + dz * dz > WORLD_DRAW_DIST * WORLD_DRAW_DIST;
+struct FrustumPlane {
+    float axis[3];
+    float bias;
+};
+
+struct FrustumPlanes {
+    FrustumPlane plane[5];
+};
+
+static void frustum_build(const C3D_Mtx& mvp, FrustumPlanes& planes) {
+    const float* p = mvp.m;
+    const float a[5][4] = {
+        { p[0] + p[12], p[1] + p[13], p[2] + p[14], p[3] + p[15] },
+        { p[12] - p[0], p[13] - p[1], p[14] - p[2], p[15] - p[3] },
+        { p[4] + p[12], p[5] + p[13], p[6] + p[14], p[7] + p[15] },
+        { p[12] - p[4], p[13] - p[5], p[14] - p[6], p[15] - p[7] },
+        { p[12], p[13], p[14], p[15] },
+    };
+    for (int i = 0; i < 5; i++) {
+        planes.plane[i].axis[0] = a[i][0];
+        planes.plane[i].axis[1] = a[i][1];
+        planes.plane[i].axis[2] = a[i][2];
+        planes.plane[i].bias = a[i][3];
+    }
+}
+
+static bool chunk_outside_frustum(const FrustumPlanes& planes, const WorldChunkMesh& ch) {
+    for (int i = 0; i < 5; i++) {
+        const FrustumPlane& p = planes.plane[i];
+        float max_value = aabb_plane_max(p.axis, p.bias, ch);
+        if (i == 4 ? max_value <= 0.0f : max_value < 0.0f) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
 // Mesh Loading / Streaming Init
 // ---------------------------------------------------------------------------
 void world_mesh_init(void) {
+    cancel_sector_load();
     g_loaded_sectors.clear();
+    g_ground_sector_index = 0;
     g_manifest_sectors.clear();
+    g_stream_candidates.clear();
     g_fallback_chunks.clear();
     g_streaming_mode = false;
 
@@ -181,6 +248,8 @@ void world_mesh_init(void) {
             g_manifest_sectors.resize(sh.numSectors);
             if (fread(g_manifest_sectors.data(), sizeof(MWSectorRecord), sh.numSectors, mf) == sh.numSectors) {
                 g_streaming_mode = true;
+                g_stream_candidates.reserve(sh.numSectors);
+                g_loaded_sectors.reserve(32);
                 printf("World Stream: Manifest OK (%lu sectors, linear free %lu B)\n",
                        (unsigned long)sh.numSectors, (unsigned long)linearSpaceFree());
             }
@@ -189,8 +258,10 @@ void world_mesh_init(void) {
     }
 
     if (g_streaming_mode) {
-        // Initial load for spawn area around (0, 0)
-        update_streaming(0.0f, 0.0f);
+        // Match physics_init(): loading around the origin leaves the actual
+        // harbour spawn outside the draw radius while that unrelated sector
+        // is processed.
+        update_streaming(-148.0f, 164.0f, -0.7071068f, -0.7071068f);
         printf("World Stream: Spawn loaded (%lu sectors, %d chunks, free %lu B)\n",
                (unsigned long)g_loaded_sectors.size(), world_mesh_chunk_count(),
                (unsigned long)linearSpaceFree());
@@ -242,8 +313,8 @@ void world_mesh_init(void) {
             float ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
             float vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
             float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-            float len = sqrtf(nx * nx + ny * ny + nz * nz);
-            if (len < 1e-6f || fabsf(ny) / len < 0.45f) continue;
+            float normal_len_sq = nx * nx + ny * ny + nz * nz;
+            if (normal_len_sq < 1e-12f || ny * ny < 0.2025f * normal_len_sq) continue;
             float d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
             if (fabsf(d) < 1e-9f) continue;
             float minx = fminf(a[0], fminf(b[0], c[0]));
@@ -305,9 +376,10 @@ void world_mesh_init(void) {
 // ---------------------------------------------------------------------------
 // Sector Ground Grid Building
 // ---------------------------------------------------------------------------
-static void sector_ground_build(LoadedSector& sec,
-                                const std::vector<MWVertex>& verts,
-                                const std::vector<uint16_t>& indices) {
+static size_t sector_ground_build(LoadedSector& sec,
+                                  const MWVertex* verts, size_t num_verts,
+                                  const uint16_t* indices, size_t num_indices,
+                                  size_t first_triangle, size_t end_triangle) {
     if (sec.ground_lo.empty()) {
         sec.ground_lo.assign((size_t)GROUND_DIM * GROUND_DIM, GROUND_NONE);
         sec.ground_hi.assign((size_t)GROUND_DIM * GROUND_DIM, INT16_MIN);
@@ -319,9 +391,16 @@ static void sector_ground_build(LoadedSector& sec,
     float sec_min_x = sec.gx * SECTOR_SIZE;
     float sec_min_z = sec.gz * SECTOR_SIZE;
 
-    for (size_t j = 0; j + 2 < indices.size(); j += 3) {
+    size_t first_index = first_triangle * 3;
+    size_t end_index = end_triangle * 3;
+    if (end_index > num_indices) end_index = num_indices;
+    u64 start_tick = svcGetSystemTick();
+    for (size_t j = first_index; j + 2 < end_index; j += 3) {
+        if ((((j / 3) - first_triangle) & 31u) == 0 &&
+            svcGetSystemTick() - start_tick >= GROUND_BUILD_BUDGET_TICKS)
+            return j / 3;
         uint16_t i0 = indices[j], i1 = indices[j + 1], i2 = indices[j + 2];
-        if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
+        if (i0 >= num_verts || i1 >= num_verts || i2 >= num_verts) continue;
 
         const float* a = verts[i0].position;
         const float* b = verts[i1].position;
@@ -336,8 +415,8 @@ static void sector_ground_build(LoadedSector& sec,
         float nx = uy * vz - uz * vy;
         float ny = uz * vx - ux * vz;
         float nz = ux * vy - uy * vx;
-        float len = sqrtf(nx * nx + ny * ny + nz * nz);
-        if (len < 1e-6f) continue;
+        float normal_len_sq = nx * nx + ny * ny + nz * nz;
+        if (normal_len_sq < 1e-12f) continue;
 
         // Keep steep geometry as a lightweight XZ wall footprint. Rasterize
         // triangle edges because vertical faces collapse to lines in XZ.
@@ -349,7 +428,7 @@ static void sector_ground_build(LoadedSector& sec,
         float wall_max_y = fmaxf(a[1], fmaxf(b[1], c[1]));
         float wall_span_x = wall_max_x - wall_min_x;
         float wall_span_z = wall_max_z - wall_min_z;
-        if (fabsf(ny) / len < 0.30f && wall_max_y - wall_min_y > 2.0f &&
+        if (ny * ny < 0.09f * normal_len_sq && wall_max_y - wall_min_y > 2.0f &&
             fminf(wall_span_x, wall_span_z) < 1.0f) {
             const float* p[3] = { a, b, c };
             for (int e = 0; e < 3; ++e) {
@@ -374,7 +453,7 @@ static void sector_ground_build(LoadedSector& sec,
                 }
             }
         }
-        if (fabsf(ny) / len < 0.40f) continue;
+        if (ny * ny < 0.16f * normal_len_sq) continue;
 
         float d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
         if (fabsf(d) < 1e-9f) continue;
@@ -409,12 +488,31 @@ static void sector_ground_build(LoadedSector& sec,
             }
         }
     }
+    return end_triangle;
 }
 
 // ---------------------------------------------------------------------------
 // Dynamic Sector Loading & Unloading
 // ---------------------------------------------------------------------------
-static bool load_sector(const MWSectorRecord& rec) {
+static void cancel_sector_load(void) {
+    if (!g_sector_load.active) return;
+    if (g_sector_load.file) fclose(g_sector_load.file);
+    for (auto& cm : g_sector_load.sector.chunks) {
+        if (cm.vbo) linearFree(cm.vbo);
+        if (cm.ibo) linearFree(cm.ibo);
+    }
+    g_sector_load.sector = LoadedSector();
+    g_sector_load.chunk_order = std::vector<ChunkFileRecord>();
+    g_sector_load.file = NULL;
+    g_sector_load.total_chunks = 0;
+    g_sector_load.chunks_loaded = 0;
+    g_sector_load.ground_cursors.clear();
+    g_sector_load.active = false;
+}
+
+static bool start_sector_load(const MWSectorRecord& rec,
+                              float car_x, float car_z,
+                              float forward_x, float forward_z) {
     char path[128];
     snprintf(path, sizeof(path), "romfs:/assets/sectors/%s", rec.filename);
     FILE* f = fopen(path, "rb");
@@ -427,70 +525,158 @@ static bool load_sector(const MWSectorRecord& rec) {
         return false;
     }
 
-    LoadedSector sec;
-    sec.gx = rec.gx;
-    sec.gz = rec.gz;
-    for (int k = 0; k < 3; k++) {
-        sec.bbox_min[k] = rec.bbox_min[k];
-        sec.bbox_max[k] = rec.bbox_max[k];
-    }
-    sec.last_dist_sq = 0.0f;
-
-    bool ok = true;
+    std::vector<ChunkFileRecord> chunk_order;
+    chunk_order.reserve(header.numChunks);
+    bool scan_ok = true;
     for (uint32_t i = 0; i < header.numChunks; i++) {
+        long offset = ftell(f);
         MWChunkHeader ch;
-        if (fread(&ch, 1, sizeof(ch), f) != sizeof(ch)) { ok = false; break; }
-
-        std::vector<MWVertex> verts(ch.numVerts);
-        if (fread(verts.data(), sizeof(MWVertex), ch.numVerts, f) != ch.numVerts) { ok = false; break; }
-
-        std::vector<uint16_t> indices(ch.numIndices);
-        if (fread(indices.data(), sizeof(uint16_t), ch.numIndices, f) != ch.numIndices) { ok = false; break; }
-
-        if (ch.numIndices & 1) {
-            uint16_t pad;
-            fread(&pad, 1, sizeof(pad), f);
+        if (offset < 0 || fread(&ch, 1, sizeof(ch), f) != sizeof(ch)) {
+            scan_ok = false;
+            break;
         }
-
-        sector_ground_build(sec, verts, indices);
-
-        WorldChunkMesh cm;
-        memset(&cm, 0, sizeof(cm));
-        cm.num_verts = ch.numVerts;
-        cm.num_indices = ch.numIndices;
-        for (int k = 0; k < 3; k++) {
-            cm.bbox_min[k] = ch.bboxMin[k];
-            cm.bbox_max[k] = ch.bboxMax[k];
-        }
-
-        size_t vbytes = (sizeof(MWVertex) * ch.numVerts + 15u) & ~15u;
-        size_t ibytes = (sizeof(uint16_t) * ch.numIndices + 15u) & ~15u;
-        cm.vbo = linearAlloc(vbytes);
-        cm.ibo = linearAlloc(ibytes);
-        if (cm.vbo && cm.ibo) {
-            memcpy(cm.vbo, verts.data(), sizeof(MWVertex) * ch.numVerts);
-            memcpy(cm.ibo, indices.data(), sizeof(uint16_t) * ch.numIndices);
-            GSPGPU_FlushDataCache(cm.vbo, vbytes);
-            GSPGPU_FlushDataCache(cm.ibo, ibytes);
-            sec.chunks.push_back(cm);
-        } else {
-            if (cm.vbo) linearFree(cm.vbo);
-            if (cm.ibo) linearFree(cm.ibo);
-            ok = false;
+        float d2 = aabb_distance_sq(car_x, car_z,
+                                    ch.bboxMin[0], ch.bboxMin[2],
+                                    ch.bboxMax[0], ch.bboxMax[2]);
+        float priority = stream_priority(car_x, car_z, forward_x, forward_z, d2, 150.0f,
+                                         ch.bboxMin[0], ch.bboxMin[2],
+                                         ch.bboxMax[0], ch.bboxMax[2]);
+        chunk_order.push_back({offset, ch, priority});
+        size_t skip = (size_t)ch.numVerts * sizeof(MWVertex) +
+                      (size_t)ch.numIndices * sizeof(uint16_t) +
+                      ((ch.numIndices & 1u) ? sizeof(uint16_t) : 0u);
+        if (skip > 0x7fffffff || fseek(f, (long)skip, SEEK_CUR) != 0) {
+            scan_ok = false;
             break;
         }
     }
-    fclose(f);
-
-    if (ok) {
-        g_loaded_sectors.push_back(sec);
-        return true;
-    } else {
-        for (auto& cm : sec.chunks) {
-            if (cm.vbo) linearFree(cm.vbo);
-            if (cm.ibo) linearFree(cm.ibo);
-        }
+    if (!scan_ok) {
+        fclose(f);
         return false;
+    }
+    std::sort(chunk_order.begin(), chunk_order.end(),
+              [](const ChunkFileRecord& a, const ChunkFileRecord& b) {
+                  return a.priority < b.priority;
+              });
+
+    g_sector_load.sector = LoadedSector();
+    g_sector_load.chunk_order = std::move(chunk_order);
+    g_sector_load.file = f;
+    g_sector_load.sector.gx = rec.gx;
+    g_sector_load.sector.gz = rec.gz;
+    for (int k = 0; k < 3; k++) {
+        g_sector_load.sector.bbox_min[k] = rec.bbox_min[k];
+        g_sector_load.sector.bbox_max[k] = rec.bbox_max[k];
+    }
+    g_sector_load.sector.last_dist_sq = 0.0f;
+    g_sector_load.total_chunks = header.numChunks;
+    g_sector_load.chunks_loaded = 0;
+    g_sector_load.sector.chunks.reserve(header.numChunks);
+    g_sector_load.ground_cursors.reserve(header.numChunks);
+    g_sector_load.active = true;
+    return true;
+}
+
+static bool continue_sector_load(void) {
+    if (!g_sector_load.active) return false;
+    // Read and upload one nearby chunk every frame. Collision-grid work runs
+    // separately on committed sectors so it cannot stall this file stream.
+    if (g_sector_load.chunks_loaded >= g_sector_load.total_chunks) {
+        fclose(g_sector_load.file);
+        g_sector_load.file = NULL;
+        g_sector_load.sector.ground_cursors = std::move(g_sector_load.ground_cursors);
+        g_sector_load.sector.ground_scan_index = 0;
+        g_loaded_sectors.push_back(std::move(g_sector_load.sector));
+        g_sector_load.chunk_order = std::vector<ChunkFileRecord>();
+        g_sector_load.ground_cursors.clear();
+        g_sector_load.total_chunks = 0;
+        g_sector_load.chunks_loaded = 0;
+        g_sector_load.active = false;
+        return true;
+    }
+
+    FILE* f = g_sector_load.file;
+    const ChunkFileRecord& file_chunk = g_sector_load.chunk_order[g_sector_load.chunks_loaded];
+    MWChunkHeader ch = file_chunk.header;
+    if (fseek(f, file_chunk.offset + (long)sizeof(MWChunkHeader), SEEK_SET) != 0) {
+        cancel_sector_load();
+        return false;
+    }
+
+    g_load_verts.resize(ch.numVerts);
+    if (fread(g_load_verts.data(), sizeof(MWVertex), ch.numVerts, f) != ch.numVerts) {
+        cancel_sector_load();
+        return false;
+    }
+
+    g_load_indices.resize(ch.numIndices);
+    if (fread(g_load_indices.data(), sizeof(uint16_t), ch.numIndices, f) != ch.numIndices) {
+        cancel_sector_load();
+        return false;
+    }
+
+    if (ch.numIndices & 1) {
+        uint16_t pad;
+        if (fread(&pad, 1, sizeof(pad), f) != sizeof(pad)) {
+            cancel_sector_load();
+            return false;
+        }
+    }
+
+    WorldChunkMesh cm;
+    memset(&cm, 0, sizeof(cm));
+    cm.num_verts = ch.numVerts;
+    cm.num_indices = ch.numIndices;
+    for (int k = 0; k < 3; k++) {
+        cm.bbox_min[k] = ch.bboxMin[k];
+        cm.bbox_max[k] = ch.bboxMax[k];
+    }
+
+    size_t vbytes = (sizeof(MWVertex) * ch.numVerts + 15u) & ~15u;
+    size_t ibytes = (sizeof(uint16_t) * ch.numIndices + 15u) & ~15u;
+    cm.vbo = linearAlloc(vbytes);
+    cm.ibo = linearAlloc(ibytes);
+    if (!cm.vbo || !cm.ibo) {
+        if (cm.vbo) linearFree(cm.vbo);
+        if (cm.ibo) linearFree(cm.ibo);
+        cancel_sector_load();
+        return false;
+    }
+
+    memcpy(cm.vbo, g_load_verts.data(), sizeof(MWVertex) * ch.numVerts);
+    memcpy(cm.ibo, g_load_indices.data(), sizeof(uint16_t) * ch.numIndices);
+    GSPGPU_FlushDataCache(cm.vbo, vbytes);
+    GSPGPU_FlushDataCache(cm.ibo, ibytes);
+    g_sector_load.sector.chunks.push_back(cm);
+    g_sector_load.ground_cursors.push_back(0);
+    g_sector_load.chunks_loaded++;
+    return true;
+}
+
+static void update_resident_ground_build(void) {
+    if (g_loaded_sectors.empty()) return;
+    if (g_ground_sector_index >= g_loaded_sectors.size()) g_ground_sector_index = 0;
+    for (size_t n = 0; n < g_loaded_sectors.size(); n++) {
+        size_t si = (g_ground_sector_index + n) % g_loaded_sectors.size();
+        LoadedSector& sec = g_loaded_sectors[si];
+        if (sec.ground_cursors.empty()) continue;
+        size_t count = sec.chunks.size();
+        for (size_t j = 0; j < count; j++) {
+            size_t ci = (sec.ground_scan_index + j) % count;
+            WorldChunkMesh& cm = sec.chunks[ci];
+            size_t& cursor = sec.ground_cursors[ci];
+            size_t triangle_count = cm.num_indices / 3;
+            if (cursor >= triangle_count) continue;
+            size_t end = cursor + GROUND_TRIANGLES_PER_FRAME;
+            if (end > triangle_count) end = triangle_count;
+            cursor = sector_ground_build(sec,
+                static_cast<const MWVertex*>(cm.vbo), cm.num_verts,
+                static_cast<const uint16_t*>(cm.ibo), cm.num_indices,
+                cursor, end);
+            sec.ground_scan_index = (ci + 1) % count;
+            g_ground_sector_index = (si + 1) % g_loaded_sectors.size();
+            return;
+        }
     }
 }
 
@@ -510,8 +696,13 @@ static void unload_sector(size_t index) {
     g_loaded_sectors.erase(g_loaded_sectors.begin() + index);
 }
 
-static void update_streaming(float car_x, float car_z) {
+static void update_streaming(float car_x, float car_z, float forward_x, float forward_z) {
     if (!g_streaming_mode || g_manifest_sectors.empty()) return;
+    update_resident_ground_build();
+    if (g_sector_load.active) {
+        continue_sector_load();
+        return;
+    }
 
     float unload_dist_sq = STREAM_UNLOAD_DIST * STREAM_UNLOAD_DIST;
     float load_dist_sq   = STREAM_LOAD_DIST * STREAM_LOAD_DIST;
@@ -530,13 +721,16 @@ static void update_streaming(float car_x, float car_z) {
     // 2. Linear memory guard: proactively unload furthest sector if VRAM is tight
     while (linearSpaceFree() < MIN_LINEAR_FREE_BUDGET && g_loaded_sectors.size() > 2) {
         size_t furthest_idx = 0;
-        float max_d2 = -1.0f;
+        float worst_priority = -1.0e30f;
         for (size_t i = 0; i < g_loaded_sectors.size(); i++) {
             float d2 = aabb_distance_sq(car_x, car_z,
                                         g_loaded_sectors[i].bbox_min[0], g_loaded_sectors[i].bbox_min[2],
                                         g_loaded_sectors[i].bbox_max[0], g_loaded_sectors[i].bbox_max[2]);
-            if (d2 > max_d2) {
-                max_d2 = d2;
+            float priority = stream_priority(car_x, car_z, forward_x, forward_z, d2, 400.0f,
+                                             g_loaded_sectors[i].bbox_min[0], g_loaded_sectors[i].bbox_min[2],
+                                             g_loaded_sectors[i].bbox_max[0], g_loaded_sectors[i].bbox_max[2]);
+            if (priority > worst_priority) {
+                worst_priority = priority;
                 furthest_idx = i;
             }
         }
@@ -544,11 +738,7 @@ static void update_streaming(float car_x, float car_z) {
     }
 
     // 3. Find candidates to load within load distance
-    struct Candidate {
-        size_t index;
-        float d2;
-    };
-    std::vector<Candidate> to_load;
+    g_stream_candidates.clear();
 
     for (size_t i = 0; i < g_manifest_sectors.size(); i++) {
         const MWSectorRecord& rec = g_manifest_sectors[i];
@@ -566,23 +756,49 @@ static void update_streaming(float car_x, float car_z) {
                                     rec.bbox_min[0], rec.bbox_min[2],
                                     rec.bbox_max[0], rec.bbox_max[2]);
         if (d2 <= load_dist_sq) {
-            to_load.push_back({i, d2});
+            float priority = stream_priority(car_x, car_z, forward_x, forward_z, d2, 400.0f,
+                                             rec.bbox_min[0], rec.bbox_min[2],
+                                             rec.bbox_max[0], rec.bbox_max[2]);
+            g_stream_candidates.push_back({i, priority});
         }
     }
 
-    // Sort by proximity (nearest sector loads first)
-    std::sort(to_load.begin(), to_load.end(), [](const Candidate& a, const Candidate& b) {
-        return a.d2 < b.d2;
+    // Favor sectors along the direction of travel while still considering
+    // distance, so the cache prepares the road ahead instead of filling with
+    // equally close sectors behind the car.
+    std::sort(g_stream_candidates.begin(), g_stream_candidates.end(), [](const StreamCandidate& a, const StreamCandidate& b) {
+        return a.priority < b.priority;
     });
 
-    // Budget: load at most one sector per frame, and only when its full
-    // vertex/index buffers fit. Do not evict a resident sector just to load
-    // the next candidate: that candidate would become the next missing one
-    // and make the streamer alternate between sectors every frame.
-    for (const Candidate& candidate : to_load) {
+    // Budget: load at most one sector per frame. If memory is full, replace
+    // a much farther resident sector with the nearest missing candidate. The
+    // distance margin prevents the cache from oscillating between neighbours.
+    for (const StreamCandidate& candidate : g_stream_candidates) {
         const MWSectorRecord& target = g_manifest_sectors[candidate.index];
+        while (linearSpaceFree() < sector_gpu_bytes(target) && g_loaded_sectors.size() > 1) {
+            size_t furthest_idx = 0;
+            float furthest_priority = -1.0e30f;
+            for (size_t i = 0; i < g_loaded_sectors.size(); i++) {
+                const LoadedSector& resident = g_loaded_sectors[i];
+                float d2 = aabb_distance_sq(car_x, car_z,
+                                            resident.bbox_min[0], resident.bbox_min[2],
+                                            resident.bbox_max[0], resident.bbox_max[2]);
+                float priority = stream_priority(car_x, car_z, forward_x, forward_z, d2, 400.0f,
+                                                 resident.bbox_min[0], resident.bbox_min[2],
+                                                 resident.bbox_max[0], resident.bbox_max[2]);
+                if (priority > furthest_priority) {
+                    furthest_priority = priority;
+                    furthest_idx = i;
+                }
+            }
+            const float replace_margin = 25000.0f;
+            if (candidate.priority + replace_margin >= furthest_priority) break;
+            unload_sector(furthest_idx);
+        }
         if (linearSpaceFree() < sector_gpu_bytes(target)) continue;
-        load_sector(target);
+        if (!start_sector_load(target, car_x, car_z, forward_x, forward_z)) {
+            printf("World Stream: failed to start %s\n", target.filename);
+        }
         break;
     }
 }
@@ -696,10 +912,11 @@ bool world_mesh_sweep_blocked(float x0, float z0, float y, float x1, float z1) {
 // ---------------------------------------------------------------------------
 // World Rendering & Frustum Draw
 // ---------------------------------------------------------------------------
-void world_mesh_render(const C3D_Mtx* projection, const C3D_Mtx* view, float car_x, float car_z) {
+void world_mesh_render(const C3D_Mtx* projection, const C3D_Mtx* view,
+                       float car_x, float car_z, float forward_x, float forward_z) {
     if (g_streaming_mode) {
-        update_streaming(car_x, car_z);
-        if (g_loaded_sectors.empty()) return;
+        update_streaming(car_x, car_z, forward_x, forward_z);
+        if (g_loaded_sectors.empty() && !g_sector_load.active) return;
     } else {
         if (g_fallback_chunks.empty()) return;
     }
@@ -711,19 +928,55 @@ void world_mesh_render(const C3D_Mtx* projection, const C3D_Mtx* view, float car
     Mtx_Multiply(&mv, view, &model);
     Mtx_Multiply(&mvp, projection, &mv);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_uLoc_mvp, &mvp);
+    FrustumPlanes frustum;
+    frustum_build(mvp, frustum);
 
     if (g_streaming_mode) {
+        struct DrawCandidate {
+            const WorldChunkMesh* chunk;
+            float priority;
+        };
+        static const size_t MAX_DRAW_CHUNKS = 64;
+        DrawCandidate draw_list[MAX_DRAW_CHUNKS];
+        size_t draw_count = 0;
+        auto consider_chunk = [&](const WorldChunkMesh& ch) {
+            if (!ch.vbo || !ch.ibo || ch.num_indices == 0) return;
+            float distance_sq = aabb_distance_sq(car_x, car_z,
+                                                 ch.bbox_min[0], ch.bbox_min[2],
+                                                 ch.bbox_max[0], ch.bbox_max[2]);
+            if (distance_sq > WORLD_DRAW_DIST * WORLD_DRAW_DIST ||
+                chunk_outside_frustum(frustum, ch)) return;
+            float priority = stream_priority(car_x, car_z, forward_x, forward_z, distance_sq, 150.0f,
+                                             ch.bbox_min[0], ch.bbox_min[2],
+                                             ch.bbox_max[0], ch.bbox_max[2]);
+            size_t at = 0;
+            while (at < draw_count && draw_list[at].priority <= priority) at++;
+            if (at >= MAX_DRAW_CHUNKS) return;
+            if (draw_count < MAX_DRAW_CHUNKS) draw_count++;
+            for (size_t j = draw_count - 1; j > at; j--) draw_list[j] = draw_list[j - 1];
+            draw_list[at].chunk = &ch;
+            draw_list[at].priority = priority;
+        };
+
         for (const auto& sec : g_loaded_sectors) {
-            for (const auto& ch : sec.chunks) {
-                if (!ch.vbo || !ch.ibo || ch.num_indices == 0) continue;
-                if (chunk_too_far(ch, car_x, car_z) || chunk_outside_frustum(mvp, ch)) continue;
+            for (const auto& ch : sec.chunks) consider_chunk(ch);
+        }
+        if (g_sector_load.active) {
+            for (const auto& ch : g_sector_load.sector.chunks) consider_chunk(ch);
+        }
 
-                C3D_BufInfo* bufInfo = C3D_GetBufInfo();
-                BufInfo_Init(bufInfo);
-                BufInfo_Add(bufInfo, ch.vbo, sizeof(MWVertex), 3, 0x210);
+        uint32_t triangles_left = WORLD_TRIANGLE_BUDGET;
+        for (size_t i = 0; i < draw_count; i++) {
+            const WorldChunkMesh& ch = *draw_list[i].chunk;
+            uint32_t triangles = ch.num_indices / 3;
+            if (triangles > triangles_left) continue;
 
-                C3D_DrawElements(GPU_TRIANGLES, ch.num_indices, C3D_UNSIGNED_SHORT, ch.ibo);
-            }
+            C3D_BufInfo* bufInfo = C3D_GetBufInfo();
+            BufInfo_Init(bufInfo);
+            BufInfo_Add(bufInfo, ch.vbo, sizeof(MWVertex), 3, 0x210);
+            C3D_DrawElements(GPU_TRIANGLES, ch.num_indices, C3D_UNSIGNED_SHORT, ch.ibo);
+            triangles_left -= triangles;
+            if (!triangles_left) break;
         }
     } else {
         for (const auto& ch : g_fallback_chunks) {
@@ -745,6 +998,7 @@ int world_mesh_chunk_count(void) {
     if (g_streaming_mode) {
         int count = 0;
         for (const auto& sec : g_loaded_sectors) count += (int)sec.chunks.size();
+        if (g_sector_load.active) count += (int)g_sector_load.sector.chunks.size();
         return count;
     }
     return (int)g_fallback_chunks.size();

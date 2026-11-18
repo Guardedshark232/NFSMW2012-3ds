@@ -12,10 +12,10 @@ APP_ICON = $(CTRULIB)/default_icon.png
 
 # Compiler Flags
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
-CFLAGS := -O2 $(ARCH) -g -Wall -ffunction-sections
+CFLAGS := -O2 $(ARCH) -g -Wall -ffunction-sections -fdata-sections -flto
 CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++14
 ASFLAGS := -g $(ARCH)
-LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(TARGET).map
+LDFLAGS := -specs=3dsx.specs -g $(ARCH) -flto -Wl,--gc-sections -Wl,-Map,$(TARGET).map
 
 # Include Directories
 INCLUDES := -I./src -I./src/core -I./src/input -I./src/renderer -I./src/physics \

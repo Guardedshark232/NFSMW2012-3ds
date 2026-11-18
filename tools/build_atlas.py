@@ -22,7 +22,7 @@ import mwtex
 
 ATLAS = 1024
 TILE = 32
-GRID = ATLAS // TILE          # 8x8 = 64 slots
+GRID = ATLAS // TILE          # 32x32 = 1,024 slots
 INSET = 1.0                   # texels of padding on each tile edge
 FALLBACK = (-1, -1)           # grey tile for materials with no texture
 
@@ -55,6 +55,18 @@ def build(map_data, out_png):
         tiles[tid] = ((n % GRID) * TILE, (n // GRID) * TILE)
 
     atlas = Image.new("RGBA", (ATLAS, ATLAS), (96, 96, 96, 255))
+    # Use the most widely referenced albedo for materials with no decoded
+    # texture. A real surface texture is less conspicuous than a flat grey
+    # patch, and the reserved tile keeps existing fallback UVs valid.
+    if order:
+        b, r = mwtex.resolve(order[0], 1)
+        if r:
+            arr = mwtex.decode_texture(b, r)
+            if arr is not None:
+                fallback = Image.fromarray(arr, "RGBA").convert("RGB")
+                fallback = fallback.resize((TILE, TILE), Image.LANCZOS).convert("RGBA")
+                fallback.putalpha(255)
+                atlas.paste(fallback, (0, 0))
     for tid, (px, py) in tiles.items():
         b, r = mwtex.resolve(tid, 1)
         if not r:
