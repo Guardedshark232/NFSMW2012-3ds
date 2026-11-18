@@ -142,6 +142,12 @@ void physics_set_ground_height(float y) {
     g_car.pos_y = y;
 }
 
+void physics_stop_at(float x, float z) {
+    g_car.pos_x = x;
+    g_car.pos_z = z;
+    g_car.speed = 0.0f;
+}
+
 const CarPhysicsState* physics_get_state(void) {
     return &g_car;
 }

@@ -25,6 +25,7 @@ typedef struct {
 void physics_init(void);
 void physics_update(float dt, float throttle, float brake, float steering, bool nitrous, bool handbrake);
 void physics_set_ground_height(float y);
+void physics_stop_at(float x, float z);
 const CarPhysicsState* physics_get_state(void);
 
 #endif // PHYSICS_H

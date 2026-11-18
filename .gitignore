@@ -3,7 +3,8 @@ session-*.md
 *.kate-swp
 .opencode/
 .wine/
-
+progress.md
+full_world_progress.md
 # Build outputs and compiled 3DS binaries
 build/
 *.elf

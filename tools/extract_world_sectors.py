@@ -53,8 +53,10 @@ def collect_sector_parts(bundle_paths, origin, slot_of):
                 continue
             cx, cy, cz = p["centre"]
             rad = p["radius"]
-            # Skip local props / debris and giant sky/ocean shells
-            if (abs(cx) <= 50.0 and abs(cz) <= 50.0) or rad <= 20.0 or rad >= 600.0:
+            # Skip origin-centered local props and extreme sky/ocean shells.
+            # Long highway/interchange renderables can have 600-1500 m radii;
+            # keep those and let triangle edge filtering remove decoder sails.
+            if (abs(cx) <= 50.0 and abs(cz) <= 50.0) or rad >= 5000.0:
                 continue
 
             m = extract_mesh(r, b)

@@ -7,6 +7,7 @@
 #include "renderer.h"
 #include "physics.h"
 #include "bndl.h"
+#include "world_mesh.h"
 
 // Define to build the automated driving verification (holds throttle and
 // logs telemetry to sdmc:/drive_diag.txt).  Off for normal builds.
@@ -106,7 +107,13 @@ int main(int argc, char **argv) {
         }
 #endif
 
+        const CarPhysicsState* before_drive = physics_get_state();
+        float old_x = before_drive->pos_x, old_y = before_drive->pos_y, old_z = before_drive->pos_z;
         physics_update(dt, throttle, brake, steering, nitrous, handbrake);
+        const CarPhysicsState* after_drive = physics_get_state();
+        if (world_mesh_sweep_blocked(old_x, old_z, old_y,
+                                     after_drive->pos_x, after_drive->pos_z))
+            physics_stop_at(old_x, old_z);
 
         // Render Frame
         renderer_begin_frame();

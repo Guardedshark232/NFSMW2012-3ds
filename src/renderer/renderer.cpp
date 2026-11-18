@@ -54,6 +54,7 @@ static size_t g_sky_num_verts = 0;
 static void* g_water_vbo = NULL;
 static size_t g_water_num_verts = 0;
 static const float WATER_LEVEL = -17.0f;
+static const float SPAWN_GROUND_Y = -13.6f;
 
 // Camera state with smooth interpolation
 static float g_cam_x = 0.0f;
@@ -402,7 +403,8 @@ void renderer_render_world_and_car(float dt) {
     // snap-to-height used to drop the car (and the chase camera) onto the
     // seabed whenever the 4m ground cell sampled a lower deck through a
     // hole in the quay, which buried the camera under the apron.
-    float ground = world_mesh_ground_height(car->pos_x, car->pos_z, g_car_y);
+    float ground = world_mesh_ground_height(car->pos_x, car->pos_z,
+                                           g_car_y_valid ? g_car_y : SPAWN_GROUND_Y);
     if (!g_car_y_valid) {
         g_car_y = ground;
         g_car_y_valid = true;
@@ -413,7 +415,7 @@ void renderer_render_world_and_car(float dt) {
             float max_down = 9.0f * step + 0.02f;   // ~9 m/s descent
             if (dy < -max_down) dy = -max_down;
         } else {
-            float max_up = 14.0f * step + 0.02f;    // ~14 m/s climb
+            float max_up = 6.0f * step + 0.02f;     // reject abrupt hops to nearby roofs
             if (dy > max_up) dy = max_up;
         }
         g_car_y += dy;

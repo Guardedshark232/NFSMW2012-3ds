@@ -69,9 +69,11 @@ struct WorldChunkMesh {
 // ---------------------------------------------------------------------------
 // Per-Sector Ground Height Grid (CPU side, local to each loaded 500m sector)
 // ---------------------------------------------------------------------------
-static const float GROUND_CELL = 4.0f;
+static const float GROUND_CELL = 2.0f;
 static const float SECTOR_SIZE = 500.0f;
-static const int   GROUND_DIM  = 126; // 126 * 4 m = 504 m (covers a 500m sector + border)
+static const int   GROUND_DIM  = 252; // 252 * 2 m = 504 m (covers a 500m sector + border)
+static const float WALL_CELL = 2.0f;
+static const int WALL_DIM = 252;
 static const int16_t GROUND_NONE = INT16_MAX;
 
 struct LoadedSector {
@@ -82,6 +84,9 @@ struct LoadedSector {
     std::vector<WorldChunkMesh> chunks;
     std::vector<int16_t> ground_lo;
     std::vector<int16_t> ground_hi;
+    std::vector<uint8_t> wall_cells;
+    std::vector<int16_t> wall_lo;
+    std::vector<int16_t> wall_hi;
     float last_dist_sq;
 };
 
@@ -270,6 +275,9 @@ static void sector_ground_build(LoadedSector& sec,
     if (sec.ground_lo.empty()) {
         sec.ground_lo.assign((size_t)GROUND_DIM * GROUND_DIM, GROUND_NONE);
         sec.ground_hi.assign((size_t)GROUND_DIM * GROUND_DIM, INT16_MIN);
+        sec.wall_cells.assign((size_t)WALL_DIM * WALL_DIM, 0);
+        sec.wall_lo.assign((size_t)WALL_DIM * WALL_DIM, INT16_MAX);
+        sec.wall_hi.assign((size_t)WALL_DIM * WALL_DIM, INT16_MIN);
     }
 
     float sec_min_x = sec.gx * SECTOR_SIZE;
@@ -293,7 +301,44 @@ static void sector_ground_build(LoadedSector& sec,
         float ny = uz * vx - ux * vz;
         float nz = ux * vy - uy * vx;
         float len = sqrtf(nx * nx + ny * ny + nz * nz);
-        if (len < 1e-6f || fabsf(ny) / len < 0.40f) continue;
+        if (len < 1e-6f) continue;
+
+        // Keep steep geometry as a lightweight XZ wall footprint. Rasterize
+        // triangle edges because vertical faces collapse to lines in XZ.
+        float wall_min_x = fminf(a[0], fminf(b[0], c[0]));
+        float wall_max_x = fmaxf(a[0], fmaxf(b[0], c[0]));
+        float wall_min_z = fminf(a[2], fminf(b[2], c[2]));
+        float wall_max_z = fmaxf(a[2], fmaxf(b[2], c[2]));
+        float wall_min_y = fminf(a[1], fminf(b[1], c[1]));
+        float wall_max_y = fmaxf(a[1], fmaxf(b[1], c[1]));
+        float wall_span_x = wall_max_x - wall_min_x;
+        float wall_span_z = wall_max_z - wall_min_z;
+        if (fabsf(ny) / len < 0.30f && wall_max_y - wall_min_y > 2.0f &&
+            fminf(wall_span_x, wall_span_z) < 1.0f) {
+            const float* p[3] = { a, b, c };
+            for (int e = 0; e < 3; ++e) {
+                const float* p0 = p[e];
+                const float* p1 = p[(e + 1) % 3];
+                float dx = p1[0] - p0[0], dz = p1[2] - p0[2];
+                int steps = (int)ceilf(fmaxf(fabsf(dx), fabsf(dz)) / 1.0f);
+                if (steps < 1) steps = 1;
+                for (int s = 0; s <= steps; ++s) {
+                    float t = (float)s / (float)steps;
+                    int ix = (int)floorf((p0[0] + dx * t - sec_min_x) / WALL_CELL);
+                    int iz = (int)floorf((p0[2] + dz * t - sec_min_z) / WALL_CELL);
+                    if (ix >= 0 && ix < WALL_DIM && iz >= 0 && iz < WALL_DIM) {
+                        size_t wi = (size_t)iz * WALL_DIM + ix;
+                        int16_t wy = (int16_t)lrintf((p0[1] + (p1[1] - p0[1]) * t) * 100.0f);
+                        sec.wall_cells[wi] = 1;
+                        int16_t low = (int16_t)(wy - 100);
+                        int16_t high = (int16_t)(wy + 100);
+                        if (low < sec.wall_lo[wi]) sec.wall_lo[wi] = low;
+                        if (high > sec.wall_hi[wi]) sec.wall_hi[wi] = high;
+                    }
+                }
+            }
+        }
+        if (fabsf(ny) / len < 0.40f) continue;
 
         float d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
         if (fabsf(d) < 1e-9f) continue;
@@ -423,6 +468,9 @@ static void unload_sector(size_t index) {
     sec.chunks.clear();
     sec.ground_lo.clear();
     sec.ground_hi.clear();
+    sec.wall_cells.clear();
+    sec.wall_lo.clear();
+    sec.wall_hi.clear();
     g_loaded_sectors.erase(g_loaded_sectors.begin() + index);
 }
 
@@ -569,6 +617,38 @@ float world_mesh_ground_height(float x, float z, float fallback) {
         }
     }
     return best_y;
+}
+
+static bool wall_cell_at(float x, float z, float y) {
+    int gx = (int)floorf(x / SECTOR_SIZE);
+    int gz = (int)floorf(z / SECTOR_SIZE);
+    for (const auto& sec : g_loaded_sectors) {
+        if (sec.gx != gx || sec.gz != gz || sec.wall_cells.empty()) continue;
+        float sx = sec.gx * SECTOR_SIZE;
+        float sz = sec.gz * SECTOR_SIZE;
+        int ix = (int)floorf((x - sx) / WALL_CELL);
+        int iz = (int)floorf((z - sz) / WALL_CELL);
+        if (ix < 0 || ix >= WALL_DIM || iz < 0 || iz >= WALL_DIM) return false;
+        size_t idx = (size_t)iz * WALL_DIM + ix;
+        if (!sec.wall_cells[idx]) return false;
+        float low = (float)sec.wall_lo[idx] / 100.0f;
+        float high = (float)sec.wall_hi[idx] / 100.0f;
+        return high >= y && low <= y + 1.8f;
+    }
+    return false;
+}
+
+bool world_mesh_sweep_blocked(float x0, float z0, float y, float x1, float z1) {
+    float dx = x1 - x0, dz = z1 - z0;
+    int steps = (int)ceilf(fmaxf(fabsf(dx), fabsf(dz)) / 0.75f);
+    if (steps < 1) steps = 1;
+    for (int i = 1; i <= steps; ++i) {
+        float t = (float)i / (float)steps;
+        float x = x0 + dx * t, z = z0 + dz * t;
+        // Approximate the car footprint with a center and four edge samples.
+        if (wall_cell_at(x, z, y)) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
