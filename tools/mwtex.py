@@ -16,8 +16,7 @@ import struct
 import numpy as np
 
 from bndl import Bundle
-
-MW_DIR = "/home/vincenzo/.local/share/Steam/steamapps/common/Need for Speed(TM) Most Wanted/HAWAII"
+from game_paths import MW_DIR, require_game_files
 
 # id -> (bundle filename, resource index, type_id)
 _INDEX = None
@@ -37,6 +36,7 @@ _CACHE = "/tmp/opencode/mw/global_ids.json"
 def global_index(progress=False):
     """Scan every .BNDL in HAWAII once and index type-1/type-2 resources."""
     global _INDEX
+    require_game_files()
     if _INDEX is not None:
         return _INDEX
     if os.path.exists(_CACHE):

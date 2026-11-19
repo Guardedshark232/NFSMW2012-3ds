@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bndl import Bundle
 from mwmesh import parse_renderable, extract_mesh
 import build_atlas
+from game_paths import require_game_files
 from extract_world import (
     MW_DIR, VERTEX_SIZE, dedupe_lod_resources, build_indexed_chunk,
     weld_chunks, write_mwmesh, make_yard_decorator
@@ -401,6 +402,7 @@ def build_and_save_sectors(sectors, origin, slot_of, out_dir):
 
 
 def main():
+    require_game_files()
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out_dir = os.path.join(project_root, "romfs", "assets", "sectors")
 

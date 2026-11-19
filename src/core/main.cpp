@@ -13,11 +13,28 @@
 // logs telemetry to sdmc:/drive_diag.txt).  Off for normal builds.
 #define DIAG_AUTO_DRIVE 0
 
+// Body radius used against baked wall segments.  The car is ~1.9 m wide, so
+// a 1.1 m circle keeps the shell out of walls without snagging on kerbs.
+static const float CAR_COLLISION_RADIUS = 1.1f;
+
+static bool is_new_3ds(void) {
+    u8 model = 0;
+    if (R_FAILED(CFGU_GetSystemModel(&model))) return false;
+    return model == CFG_MODEL_N3DS ||
+           model == CFG_MODEL_N3DSXL ||
+           model == CFG_MODEL_N2DSXL;
+}
+
 int main(int argc, char **argv) {
     Result rc = romfsInit();
     bool romfs_ok = R_SUCCEEDED(rc);
 
     cfguInit();
+    // The New 3DS can run the CPU at 804 MHz and use its L2 cache; request
+    // that before the first frame and widen the world draw budget to match.
+    bool new3ds = is_new_3ds();
+    if (new3ds) osSetSpeedupEnable(true);
+    world_mesh_set_quality(new3ds);
     renderer_init();
     input_init();
     physics_init();
@@ -34,7 +51,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    u64 lastTick = osGetTime();
+    u64 lastTick = svcGetSystemTick();
     u32 frameCount = 0;
     float fps = 60.0f;
     u64 fpsTimer = osGetTime();
@@ -43,16 +60,17 @@ int main(int argc, char **argv) {
     int easyDriveSelection = 0;
 
     while (aptMainLoop()) {
-        u64 currentTick = osGetTime();
-        float dt = (float)(currentTick - lastTick) / 1000.0f;
+        u64 currentTick = svcGetSystemTick();
+        float dt = (float)(currentTick - lastTick) / (float)SYSCLOCK_ARM11;
         if (dt <= 0.0f || dt > 0.1f) dt = 0.016f;
         lastTick = currentTick;
 
+        u64 nowMs = osGetTime();
         frameCount++;
-        if (currentTick - fpsTimer >= 500) {
-            fps = (float)frameCount / ((float)(currentTick - fpsTimer) / 1000.0f);
+        if (nowMs - fpsTimer >= 500) {
+            fps = (float)frameCount / ((float)(nowMs - fpsTimer) / 1000.0f);
             frameCount = 0;
-            fpsTimer = currentTick;
+            fpsTimer = nowMs;
         }
 
         input_update();
@@ -109,12 +127,19 @@ int main(int argc, char **argv) {
 #endif
 
         const CarPhysicsState* before_drive = physics_get_state();
-        float old_x = before_drive->pos_x, old_y = before_drive->pos_y, old_z = before_drive->pos_z;
+        float old_x = before_drive->pos_x, old_z = before_drive->pos_z;
         physics_update(dt, throttle, brake, steering, nitrous, handbrake);
         const CarPhysicsState* after_drive = physics_get_state();
-        if (world_mesh_sweep_blocked(old_x, old_z, old_y,
-                                     after_drive->pos_x, after_drive->pos_z))
-            physics_stop_at(old_x, old_z);
+
+        // Resolve the frame's motion against the baked wall segments.  The
+        // resolver slides along glancing contacts instead of freezing the car
+        // at its previous position, then reports how much motion was lost so
+        // physics can scrub speed by the impact.
+        float solved_x = old_x, solved_z = old_z;
+        float blocked = world_mesh_move(&solved_x, &solved_z,
+                                        after_drive->pos_x, after_drive->pos_z,
+                                        after_drive->pos_y, CAR_COLLISION_RADIUS);
+        physics_apply_collision(solved_x, solved_z, blocked, dt);
 
         // Render Frame
         renderer_begin_frame();

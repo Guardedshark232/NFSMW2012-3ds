@@ -8,8 +8,7 @@ import glob
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bndl import Bundle
 from PIL import Image, ImageDraw
-
-MW = "/home/vincenzo/.local/share/Steam/steamapps/common/Need for Speed(TM) Most Wanted"
+from game_paths import MW_ROOT
 
 
 def collect(folder, pattern="*.BNDL"):
@@ -57,7 +56,7 @@ def sheet(entries, out, cols=8, thumb=112, per_sheet=160):
 
 
 if __name__ == "__main__":
-    folder = sys.argv[1] if len(sys.argv) > 1 else os.path.join(MW, "UI/IMAGES/STREAMED")
+    folder = sys.argv[1] if len(sys.argv) > 1 else os.path.join(MW_ROOT, "UI/IMAGES/STREAMED")
     out = sys.argv[2] if len(sys.argv) > 2 else "/tmp/opencode/mw_tex/sheet.png"
     entries = collect(folder)
     print("textures:", len(entries))

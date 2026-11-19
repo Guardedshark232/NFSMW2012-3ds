@@ -28,7 +28,10 @@ typedef struct {
 void physics_init(void);
 void physics_update(float dt, float throttle, float brake, float steering, bool nitrous, bool handbrake);
 void physics_set_ground_height(float y);
-void physics_stop_at(float x, float z);
+// Commit the collision-resolved position and scrub speed by the fraction of
+// the requested motion that walls absorbed (0 = clear, 1 = fully blocked).
+// A square hit stops the car; glancing contact applies mild drag per second.
+void physics_apply_collision(float x, float z, float blocked, float dt);
 const CarPhysicsState* physics_get_state(void);
 
 #endif // PHYSICS_H

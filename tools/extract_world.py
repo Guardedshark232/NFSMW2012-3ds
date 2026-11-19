@@ -27,8 +27,7 @@ from bndl import Bundle
 from mwmesh import extract_mesh, MAX_TRI_EDGE
 import build_atlas
 import yard_props
-
-MW_DIR = "/home/vincenzo/.local/share/Steam/steamapps/common/Need for Speed(TM) Most Wanted/HAWAII"
+from game_paths import MW_DIR, require_game_files
 
 # Packed vertex: float3 position + u8x4 tint + u16x2 atlas UV (20 bytes).
 VERTEX_SIZE = 20
@@ -504,6 +503,7 @@ def render_topdown_preview(chunks, out_png, size=512, span=550.0):
 
 
 if __name__ == "__main__":
+    require_game_files()
     # ARENA_527911 (Fairhaven harbour district).  The chosen spawn is the
     # flat harbour apron at world (-168, 30, 4058); making that the local
     # origin puts the car at (0, 0, 0) on the apron.

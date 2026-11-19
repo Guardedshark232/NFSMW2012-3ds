@@ -404,6 +404,7 @@ void renderer_render_world_and_car(float dt) {
     // seabed whenever the 4m ground cell sampled a lower deck through a
     // hole in the quay, which buried the camera under the apron.
     float ground = world_mesh_ground_height(car->pos_x, car->pos_z,
+                                           g_car_y_valid ? g_car_y : SPAWN_GROUND_Y,
                                            g_car_y_valid ? g_car_y : SPAWN_GROUND_Y);
     if (!g_car_y_valid) {
         g_car_y = ground;

@@ -29,12 +29,17 @@ void input_update(void) {
 
     circlePosition pos;
     hidCircleRead(&pos);
-    g_input.stick_x = (float)pos.dx / 150.0f;
-    g_input.stick_y = (float)pos.dy / 150.0f;
-    if (g_input.stick_x >  1.0f) g_input.stick_x =  1.0f;
-    if (g_input.stick_x < -1.0f) g_input.stick_x = -1.0f;
-    if (g_input.stick_y >  1.0f) g_input.stick_y =  1.0f;
-    if (g_input.stick_y < -1.0f) g_input.stick_y = -1.0f;
+    auto shape_axis = [](s16 raw) -> float {
+        float v = (float)raw / 150.0f;
+        if (v >  1.0f) v =  1.0f;
+        if (v < -1.0f) v = -1.0f;
+        const float deadzone = 0.08f;
+        if (v > -deadzone && v < deadzone) return 0.0f;
+        return (v > 0.0f) ? (v - deadzone) / (1.0f - deadzone)
+                          : (v + deadzone) / (1.0f - deadzone);
+    };
+    g_input.stick_x = shape_axis(pos.dx);
+    g_input.stick_y = shape_axis(pos.dy);
 }
 
 bool input_is_pressed(ActionID action) {

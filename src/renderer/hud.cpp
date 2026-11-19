@@ -22,6 +22,7 @@ static C2D_TextBuf g_staticBuf = NULL;
 static C2D_TextBuf g_dynamicBuf = NULL;
 static C2D_TextBuf g_easyBuf = NULL;
 static C2D_Font g_font = NULL;
+static C2D_Font g_systemFont = NULL;
 static C2D_Text g_staticText[6];
 static C2D_Text g_dynamicText[6];
 static unsigned int g_hudFrame = 0;
@@ -40,18 +41,25 @@ enum StaticText {
 void hud_init(void) {
     g_dynamicReady = false;
     g_hudFrame = 0;
-    g_staticBuf = C2D_TextBufNew(4096);
-    g_dynamicBuf = C2D_TextBufNew(1024);
-    g_easyBuf = C2D_TextBufNew(1024);
-
-    // Load bundled UI font from RomFS (never crashes if system font is missing)
+    // Load a bundled font before creating text buffers. TextBufNew initializes
+    // Citro2D's glyph cache, which can fail on systems without a mapped system
+    // font even when the game includes its own font assets.
     g_font = C2D_FontLoad("romfs:/assets/helvetica.bcfnt");
     if (!g_font) {
         g_font = C2D_FontLoad("romfs:/assets/conduit.bcfnt");
     }
     if (!g_font) {
-        g_font = C2D_FontLoadSystem(CFG_REGION_USA);
+        g_systemFont = C2D_FontLoadSystem(CFG_REGION_USA);
+        g_font = g_systemFont;
     }
+    if (!g_font) {
+        printf("HUD: no usable font found; text disabled\n");
+        return;
+    }
+
+    g_staticBuf = C2D_TextBufNew(4096);
+    g_dynamicBuf = C2D_TextBufNew(1024);
+    g_easyBuf = C2D_TextBufNew(1024);
 
     static const char* labels[6] = {
         "NFS: MOST WANTED (2012) - FAIRHAVEN 3DS",
@@ -69,10 +77,11 @@ void hud_init(void) {
 }
 
 void hud_exit(void) {
-    if (g_font) {
+    if (g_font && g_font != g_systemFont) {
         C2D_FontFree(g_font);
-        g_font = NULL;
     }
+    g_font = NULL;
+    if (g_systemFont) { C2D_FontFree(g_systemFont); g_systemFont = NULL; }
     if (g_staticBuf) {
         C2D_TextBufDelete(g_staticBuf);
         g_staticBuf = NULL;
@@ -129,7 +138,7 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
                      car->distance, fps, 1000.0f / (fps > 0 ? fps : 60.0f));
         }
         parse_cached(&g_dynamicText[3], g_dynamicBuf, text);
-        if (bndl_opened) snprintf(text, sizeof(text), "CHAMELEON 2: WORLDLIST.BNDL (%lu chunks loaded)", (unsigned long)bndl_entries);
+        if (bndl_opened) snprintf(text, sizeof(text), "CHAMELEON 2: WORLDLIST.BNDL (%lu entries)", (unsigned long)bndl_entries);
         else snprintf(text, sizeof(text), "CHAMELEON 2: SD / RomFS Streaming Ready");
         parse_cached(&g_dynamicText[4], g_dynamicBuf, text);
         snprintf(text, sizeof(text), "POS %6.1f %6.1f  GND %6.2f  CAM %6.2f  CH %d/%d",
@@ -177,6 +186,22 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
         float dv = (sub.bottom - sub.top) * frac;
         float u0 = sub.left + (sub.right - sub.left) * cu - du * 0.5f;
         float v0 = sub.top + (sub.bottom - sub.top) * cv - dv * 0.5f;
+        float u_min = fminf(sub.left, sub.right);
+        float u_max = fmaxf(sub.left, sub.right) - fabsf(du);
+        float v_min = fminf(sub.top, sub.bottom);
+        float v_max = fmaxf(sub.top, sub.bottom) - fabsf(dv);
+        if (du >= 0.0f) {
+            if (u0 < u_min) u0 = u_min;
+            if (u0 > u_max) u0 = u_max;
+        }
+        if (dv >= 0.0f) {
+            if (v0 < v_min) v0 = v_min;
+            if (v0 > v_max) v0 = v_max;
+        } else {
+            // Packed textures can have inverted V (top > bottom, dv < 0).
+            if (v0 > v_min - dv) v0 = v_min - dv;
+            if (v0 < v_max - dv) v0 = v_max - dv;
+        }
         sub.width = (u16)winTex;
         sub.height = (u16)winTex;
         sub.left = u0;  sub.right = u0 + du;

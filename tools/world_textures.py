@@ -137,6 +137,7 @@ def resolve_material_d0(mid):
 
 
 def main():
+    mwtex.require_game_files()
     counts = renderable_materials()
     chosen, missing = choose_textures(counts)
     uniq = {}

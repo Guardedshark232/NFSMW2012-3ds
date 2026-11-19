@@ -50,11 +50,17 @@ impossible without that install.
 ```sh
 python3 tools/world_textures.py         # material -> albedo map (JSON)
 python3 tools/extract_world_sectors.py  # extract all 8 ARENAs + districts into spatial sectors + manifest
+python3 tools/build_collision.py        # bake .mwcol sidecars for runtime collision
 python3 tools/build_atlas.py            # atlas PNG alone, if only textures changed
 python3 tools/yard_props.py             # placement preview against the current mesh
 make -j8                                # compress atlas to .t3x and re-embed RomFS into .3dsx
 make cia                                # build installable .cia
 ```
+
+`tools/build_collision.py` reads `world_manifest.bin` and every
+`romfs/assets/sectors/*.mwmesh`, then writes one `.mwcol` beside each mesh.
+Run it after any extraction that changes the sectors; the runtime uses these
+sidecars for all ground and wall queries.
 
 `tools/extract_world_sectors.py` is the full open-world sector builder. It processes all 8 `ARENA_*.BNDL` files plus connecting districts, dedupes LOD copies, partitions into 500m sectors, applies container yard dressing to the harbour, and writes `romfs/assets/sectors/` and `romfs/assets/world_manifest.bin`.
 
@@ -97,6 +103,35 @@ and `MWVertex`, not that docstring.)
 Keep `MWVertex` at 20 bytes; the `static_assert` in `world_mesh.cpp` enforces
 it. `BufInfo_Add(info, data, stride, 3, 0x210)` is required for the three
 attributes.
+
+## `.mwcol` v2 format
+
+Written by `tools/build_collision.py`, read by `collider_parse()` in
+`world_mesh.cpp`. All values are little-endian; the file is not compressed.
+
+- Header (64 bytes, `MWColHeader`): `MWCL`, version `2`, sector `gx`/`gz`,
+  ground dim/cell/origin, wall segment count, wall dim/cell/origin, reference
+  count, two reserved words.
+- Ground grids: `ground_dim²` int16 low surfaces, then `ground_dim²` int16
+  high surfaces, in centimetres. `32767` = no low surface, `-32768` = no high
+  surface.
+- Wall index: `wall_dim² + 1` int32 offsets, then `num_refs` uint32 segment
+  ids. Cell `c` owns `refs[start[c]..start[c+1])`. A long wall is listed in
+  every 8 m cell it crosses, so callers may see it more than once per query.
+- Wall segments: 20 bytes (`MWColSeg`): float `x0, z0, x1, z1` in mesh-local
+  metres, then int16 `y0`, `y1` in centimetres. There is no per-segment
+  normal; the resolver derives it from the closest-point vector.
+
+Hash origin is sector-local `-128 m` (128 m of overhang margin on the low
+side, 140 m on the high side of a 500 m cell). `GROUND_DIM` is exactly 250;
+the old runtime used 252 for a 504 m grid, which no longer matches the
+baker.
+
+The runtime queries collision from resident sectors *and* the sector currently
+streaming, because the collider is committed before its render chunks finish.
+`world_mesh_move()` sub-steps at 0.75 m, pushes a 1.1 m circle out of wall
+segments, and returns the fraction of requested motion lost so
+`physics_apply_collision()` can scrub speed.
 
 ## Texture atlas
 
@@ -181,3 +216,5 @@ frames are not mistaken for the new run.
   what they wrote.
 - Match the surrounding naming and comment density. Comments should explain
   hardware/game-format quirks, not restate the code.
+## make sure user folder is not in any of the files 
+-when creating or editing files make sure not to include user folders

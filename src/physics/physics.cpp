@@ -3,6 +3,8 @@
 #include <cmath>
 
 static CarPhysicsState g_car;
+static float g_pre_step_x = 0.0f;
+static float g_pre_step_z = 0.0f;
 static const float kReverseTopSpeed = 30.0f;
 
 // Gear top speeds (km/h) for 2012 Porsche 911 Carrera S PDK
@@ -15,15 +17,17 @@ void physics_init(void) {
     g_car.braking = 120.0f;
     g_car.steering_angle = 0.0f;
     g_car.distance = 0.0f;
-    // Spawn on the harbour street at (-148,164), facing southwest up the
-    // quay road: buildings and containers on both sides, continuous ground
-    // for well over 100 m, and open sky above the skyline.
-    g_car.heading = 0.7853982f; // 45 degrees
-    g_car.forward_x = -0.7071068f;
-    g_car.forward_z = -0.7071068f;
+    // Spawn on the harbour street at (-148,164), facing southwest down the
+    // open lane.  The street runs at roughly 236 degrees; the old 45-degree
+    // heading (225 degrees) clipped a building corner only 25 m ahead.
+    g_car.heading = 0.5934f; // 34 degrees
+    g_car.forward_x = -0.5592f;
+    g_car.forward_z = -0.8290f;
     g_car.pos_x = -148.0f;
     g_car.pos_y = 0.0f;
     g_car.pos_z = 164.0f;
+    g_pre_step_x = g_car.pos_x;
+    g_pre_step_z = g_car.pos_z;
     g_car.nitrous_active = false;
     g_car.nitrous_level = 1.0f;
     g_car.gear = 1;
@@ -35,7 +39,9 @@ void physics_init(void) {
 
 void physics_update(float dt, float throttle, float brake, float steering, bool nitrous, bool handbrake) {
     if (dt <= 0.0f) return;
-    if (dt > 0.05f) dt = 0.016f;
+    if (dt > 0.05f) dt = 0.05f;
+    g_pre_step_x = g_car.pos_x;
+    g_pre_step_z = g_car.pos_z;
 
     // Nitrous depletion and activation
     if (nitrous && !g_car.reversing && g_car.nitrous_level > 0.05f && throttle > 0.0f && g_car.speed > 10.0f) {
@@ -107,16 +113,17 @@ void physics_update(float dt, float throttle, float brake, float steering, bool 
     float steer_speed_factor = std::max(0.2f, 1.0f - (g_car.speed / (g_car.top_speed * 1.4f)));
     float target_steer = steering * steer_speed_factor;
 
-    // Smooth steering response
-    g_car.steering_angle += (target_steer - g_car.steering_angle) * (15.0f * dt);
+    // Frame-rate-independent steering and drift slip response
+    float steer_k = 1.0f - expf(-15.0f * dt);
+    g_car.steering_angle += (target_steer - g_car.steering_angle) * steer_k;
 
     float turn_rate = 1.8f;
     if (g_car.is_drifting) {
         turn_rate = 3.2f;
         float target_slip = -steering * 0.45f;
-        g_car.drift_angle += (target_slip - g_car.drift_angle) * (10.0f * dt);
+        g_car.drift_angle += (target_slip - g_car.drift_angle) * (1.0f - expf(-10.0f * dt));
     } else {
-        g_car.drift_angle += (0.0f - g_car.drift_angle) * (12.0f * dt);
+        g_car.drift_angle += (0.0f - g_car.drift_angle) * (1.0f - expf(-12.0f * dt));
     }
 
     float motion_dir = g_car.reversing ? -1.0f : 1.0f;
@@ -124,7 +131,6 @@ void physics_update(float dt, float throttle, float brake, float steering, bool 
 
     // Position updates
     float speed_ms = g_car.speed / 3.6f;
-    g_car.distance += speed_ms * dt;
 
     // Forward and lateral motion
     // heading 0 faces -Z; positive heading turns left.
@@ -177,12 +183,30 @@ void physics_set_ground_height(float y) {
     g_car.pos_y = y;
 }
 
-void physics_stop_at(float x, float z) {
+void physics_apply_collision(float x, float z, float blocked, float dt) {
+    float dx = x - g_pre_step_x;
+    float dz = z - g_pre_step_z;
+    g_car.distance += sqrtf(dx * dx + dz * dz);
     g_car.pos_x = x;
     g_car.pos_z = z;
-    g_car.speed = 0.0f;
-    g_car.reversing = false;
-    g_car.gear = 1;
+    if (blocked <= 0.0f) return;
+    if (dt <= 0.0f) dt = 0.016f;
+
+    // Nearly perpendicular impact: stop.  This is the one case where the
+    // wall absorbed almost all of the requested motion.
+    if (blocked > 0.9f) {
+        g_car.speed = 0.0f;
+        g_car.reversing = false;
+        g_car.gear = 1;
+        return;
+    }
+
+    // Glancing contact only scrubs a little speed per second, so the car can
+    // keep sliding along the wall instead of grinding to a halt.
+    float keep = 1.0f - 1.2f * blocked * dt;
+    if (keep < 0.0f) keep = 0.0f;
+    g_car.speed *= keep;
+    if (blocked > 0.5f && g_car.speed < 2.0f) g_car.speed = 0.0f;
 }
 
 const CarPhysicsState* physics_get_state(void) {
