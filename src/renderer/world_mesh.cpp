@@ -112,6 +112,12 @@ struct MWColSeg {
 static_assert(sizeof(MWColHeader) == 64, "MWColHeader must stay 64 bytes");
 static_assert(sizeof(MWColSeg) == 20, "MWColSeg must stay 20 bytes");
 
+struct MWColSegOpt {
+    float x0, z0, x1, z1;
+    float y0, y1;
+    float ex, ez, len2;
+};
+
 struct LoadedSector {
     int32_t gx;
     int32_t gz;
@@ -123,6 +129,7 @@ struct LoadedSector {
     std::vector<int32_t> wall_start;   // wall_dim^2 + 1 offsets into wall_refs
     std::vector<uint32_t> wall_refs;   // segment ids, grouped by 8 m cell
     std::vector<MWColSeg> wall_segs;
+    std::vector<MWColSegOpt> wall_segs_fast; // Pre-calculated for fast collision resolution
     float last_dist_sq;
 };
 
@@ -481,8 +488,41 @@ static void collider_parse(void) {
         memcpy(sec.wall_refs.data(), p, (size_t)hdr.num_refs * sizeof(uint32_t));
     p += (size_t)hdr.num_refs * sizeof(uint32_t);
     sec.wall_segs.resize(hdr.num_segments);
-    if (hdr.num_segments)
+    if (hdr.num_segments) {
         memcpy(sec.wall_segs.data(), p, (size_t)hdr.num_segments * sizeof(MWColSeg));
+        sec.wall_segs_fast.resize(hdr.num_segments);
+        for (uint32_t i = 0; i < hdr.num_segments; i++) {
+            const MWColSeg& s = sec.wall_segs[i];
+            sec.wall_segs_fast[i].x0 = s.x0;
+            sec.wall_segs_fast[i].z0 = s.z0;
+            sec.wall_segs_fast[i].x1 = s.x1;
+            sec.wall_segs_fast[i].z1 = s.z1;
+            sec.wall_segs_fast[i].y0 = (float)s.y0 / 100.0f;
+            sec.wall_segs_fast[i].y1 = (float)s.y1 / 100.0f;
+            sec.wall_segs_fast[i].ex = s.x1 - s.x0;
+            sec.wall_segs_fast[i].ez = s.z1 - s.z0;
+            sec.wall_segs_fast[i].len2 = sec.wall_segs_fast[i].ex * sec.wall_segs_fast[i].ex + 
+                                          sec.wall_segs_fast[i].ez * sec.wall_segs_fast[i].ez;
+        }
+    }
+
+    // Pre-calculate optimized collision data
+    sec.wall_segs_fast.resize(hdr.num_segments);
+    if (hdr.num_segments) {
+        for (uint32_t i = 0; i < hdr.num_segments; i++) {
+            const MWColSeg& s = sec.wall_segs[i];
+            sec.wall_segs_fast[i].x0 = s.x0;
+            sec.wall_segs_fast[i].z0 = s.z0;
+            sec.wall_segs_fast[i].x1 = s.x1;
+            sec.wall_segs_fast[i].z1 = s.z1;
+            sec.wall_segs_fast[i].y0 = (float)s.y0 / 100.0f;
+            sec.wall_segs_fast[i].y1 = (float)s.y1 / 100.0f;
+            sec.wall_segs_fast[i].ex = s.x1 - s.x0;
+            sec.wall_segs_fast[i].ez = s.z1 - s.z0;
+            sec.wall_segs_fast[i].len2 = sec.wall_segs_fast[i].ex * sec.wall_segs_fast[i].ex + 
+                                          sec.wall_segs_fast[i].ez * sec.wall_segs_fast[i].ez;
+        }
+    }
 }
 
 static bool collider_open(const MWSectorRecord& rec) {

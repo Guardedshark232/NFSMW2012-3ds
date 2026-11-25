@@ -43,6 +43,11 @@ void physics_update(float dt, float throttle, float brake, float steering, bool 
     g_pre_step_x = g_car.pos_x;
     g_pre_step_z = g_car.pos_z;
 
+    // Pre-calculate common factors for this frame
+    float steer_k = 1.0f - expf(-15.0f * dt);
+    float drift_slip_k = 1.0f - expf(-10.0f * dt);
+    float drift_exit_k = 1.0f - expf(-12.0f * dt);
+
     // Nitrous depletion and activation
     if (nitrous && !g_car.reversing && g_car.nitrous_level > 0.05f && throttle > 0.0f && g_car.speed > 10.0f) {
         g_car.nitrous_active = true;
@@ -114,16 +119,15 @@ void physics_update(float dt, float throttle, float brake, float steering, bool 
     float target_steer = steering * steer_speed_factor;
 
     // Frame-rate-independent steering and drift slip response
-    float steer_k = 1.0f - expf(-15.0f * dt);
     g_car.steering_angle += (target_steer - g_car.steering_angle) * steer_k;
 
     float turn_rate = 1.8f;
     if (g_car.is_drifting) {
         turn_rate = 3.2f;
         float target_slip = -steering * 0.45f;
-        g_car.drift_angle += (target_slip - g_car.drift_angle) * (1.0f - expf(-10.0f * dt));
+        g_car.drift_angle += (target_slip - g_car.drift_angle) * drift_slip_k;
     } else {
-        g_car.drift_angle += (0.0f - g_car.drift_angle) * (1.0f - expf(-12.0f * dt));
+        g_car.drift_angle += (0.0f - g_car.drift_angle) * drift_exit_k;
     }
 
     float motion_dir = g_car.reversing ? -1.0f : 1.0f;

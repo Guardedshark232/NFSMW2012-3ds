@@ -218,3 +218,7 @@ frames are not mistaken for the new run.
   hardware/game-format quirks, not restate the code.
 ## make sure user folder is not in any of the files 
 -when creating or editing files make sure not to include user folders
+## File Editing Rules
+- Always use `read` with `offset` and `limit` on the exact target lines immediately before calling `edit`.
+- Keep `oldString` short (5–15 lines max) and copy indentation character-for-character from the `read` output without line numbers.
+- If `edit` fails twice on a file, re-read the exact line range before retrying.

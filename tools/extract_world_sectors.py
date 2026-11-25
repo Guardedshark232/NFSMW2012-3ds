@@ -15,6 +15,7 @@ import glob
 import time
 import pickle
 import gc
+import numpy as np
 from collections import OrderedDict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -207,54 +208,81 @@ def collect_sector_parts(bundle_paths, origin, slot_of, spool_dir=None):
 
 
 def transform_mesh(mesh, basis, translation):
-    """Transform one decoded local mesh into its placed world coordinates."""
-    def apply(v):
-        x, y, z = v
-        return tuple(translation[k] + basis[0][k] * x + basis[1][k] * y + basis[2][k] * z
-                     for k in range(3))
+    """Transform one decoded local mesh into its placed world coordinates using NumPy."""
+    # Convert basis to a 3x3 matrix (rows are x, y, z basis vectors)
+    basis_mat = np.array(basis, dtype=np.float32)
+    trans_vec = np.array(translation, dtype=np.float32)
 
     parts = []
     all_verts = []
     for part in mesh["parts"]:
-        verts = [apply(v) for v in part["verts"]]
-        all_verts.extend(verts)
-        transformed = dict(part)
-        transformed["verts"] = verts
-        parts.append(transformed)
+        # Convert vertices to a (N, 3) array
+        v_arr = np.array(part["verts"], dtype=np.float32)
+        # Transform: v' = basis * v + translation
+        transformed_v = v_arr @ basis_mat.T + trans_vec
+        
+        # Convert back to list of tuples for compatibility with the rest of the pipeline
+        new_verts = [tuple(v) for v in transformed_v]
+        all_verts.extend(new_verts)
+        
+        transformed_part = dict(part)
+        transformed_part["verts"] = new_verts
+        parts.append(transformed_part)
+
     if not all_verts:
         return None
-    centre = apply(mesh["centre"])
-    basis_scale = max(math.sqrt(sum(v * v for v in axis)) for axis in basis)
-    return dict(centre=centre, radius=mesh["radius"] * basis_scale,
-                bbox_min=tuple(min(v[k] for v in all_verts) for k in range(3)),
-                bbox_max=tuple(max(v[k] for v in all_verts) for k in range(3)),
-                parts=parts)
+
+    # Transform centre
+    centre_vec = np.array(mesh["centre"], dtype=np.float32)
+    new_centre = tuple((centre_vec @ basis_mat.T + trans_vec).tolist())
+
+    # Calculate basis scale
+    basis_scale = np.max(np.linalg.norm(basis_mat, axis=1))
+    
+    all_verts_arr = np.array(all_verts, dtype=np.float32)
+    bbox_min = tuple(np.min(all_verts_arr, axis=0).tolist())
+    bbox_max = tuple(np.max(all_verts_arr, axis=0).tolist())
+
+    return {
+        "centre": new_centre,
+        "radius": mesh["radius"] * basis_scale,
+        "bbox_min": bbox_min,
+        "bbox_max": bbox_max,
+        "parts": parts
+    }
+
 
 
 def split_part_by_sector(part, origin, cell_size=SECTOR_SIZE):
-    """Partition a world-space part by triangle centroid into spatial cells."""
+    """Partition a world-space part by triangle centroid into spatial cells using NumPy."""
     ox, _, oz = origin
-    verts, uvs = part["verts"], part["uvs"]
+    verts = np.array(part["verts"], dtype=np.float32)
+    uvs = np.array(part["uvs"], dtype=np.float32)
+    tris = np.array(part["tris"], dtype=np.int32)
+
+    # Calculate centroids of all triangles: (T, 3)
+    # tris is (T, 3), verts is (V, 3). We want the average of vertices for each triangle.
+    tri_verts = verts[tris] # (T, 3, 3)
+    centroids = np.mean(tri_verts, axis=1) # (T, 3)
+
+    # Calculate grid indices: (T, 2)
+    gx = np.floor((centroids[:, 0] - ox) / cell_size).astype(np.int32)
+    gz = np.floor((centroids[:, 2] - oz) / cell_size).astype(np.int32)
+
     grouped = {}
-    for tri in part["tris"]:
-        a, b, c = tri
-        ax, _, az = verts[a]
-        bx, _, bz = verts[b]
-        cx, _, cz = verts[c]
-        gx = int(math.floor((((ax + bx + cx) / 3.0) - ox) / cell_size))
-        gz = int(math.floor((((az + bz + cz) / 3.0) - oz) / cell_size))
-        key = (gx, gz)
+    for i, (g_x, g_z) in enumerate(zip(gx, gz)):
+        key = (int(g_x), int(g_z))
         if key not in grouped:
             grouped[key] = {"verts": [], "uvs": [], "tris": [], "vertex_map": {}}
         dst = grouped[key]
         remapped = []
-        for src in tri:
+        for src in tris[i]:
             vi = dst["vertex_map"].get(src)
             if vi is None:
                 vi = len(dst["verts"])
                 dst["vertex_map"][src] = vi
-                dst["verts"].append(verts[src])
-                dst["uvs"].append(uvs[src])
+                dst["verts"].append(tuple(verts[src]))
+                dst["uvs"].append(tuple(uvs[src]))
             remapped.append(vi)
         dst["tris"].append(tuple(remapped))
 

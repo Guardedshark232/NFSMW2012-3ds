@@ -160,16 +160,18 @@ void world_render(const C3D_Mtx* projection, const C3D_Mtx* view, float car_z) {
     // Calculate which repeating chunk the car is in
     float base_chunk_z = std::floor(car_z / kSegmentLength) * kSegmentLength;
 
+    C3D_Mtx mvp_base, mv, mvp, model;
+    Mtx_Identity(&mvp_base);
+    Mtx_Multiply(&mvp_base, projection, view);
+
     // Render current chunk, next chunk ahead, and one chunk behind
     for (int offset_idx = -1; offset_idx <= 2; offset_idx++) {
         float chunk_offset_z = base_chunk_z + (float)offset_idx * kSegmentLength;
 
-        C3D_Mtx model, mv, mvp;
         Mtx_Identity(&model);
         Mtx_Translate(&model, 0.0f, 0.0f, chunk_offset_z, true);
 
-        Mtx_Multiply(&mv, view, &model);
-        Mtx_Multiply(&mvp, projection, &mv);
+        Mtx_Multiply(&mvp, &mvp_base, &model);
 
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_uLoc_mvp, &mvp);
         C3D_DrawArrays(GPU_TRIANGLES, 0, g_num_verts);
