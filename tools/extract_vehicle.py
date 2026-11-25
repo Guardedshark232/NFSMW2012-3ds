@@ -306,8 +306,6 @@ def body_parts(bundle):
         normals = smooth_normals(pos, tris)
         if sub_index == 4:
             tints = np.tile(np.array([0.35, 0.40, 0.48]), (len(pos), 1))
-            taillight_mask = (pos[:, 2] < -1.5) & (pos[:, 1] < 0.8)
-            tints[taillight_mask] = [0.90, 0.15, 0.10]
             colour = shade(normals) * tints
         else:
             tint = np.array(TINT_BY_SUB.get(sub_index, (1.0, 1.0, 1.0)))
@@ -320,6 +318,17 @@ def body_parts(bundle):
             cx = (tile[0] + tile[2] * 0.5) / ATLAS_W
             cy = 1.0 - (tile[1] + tile[3] * 0.5) / ATLAS_H
             remapped = np.tile((cx, cy), (len(pos), 1))
+
+        if sub_index == 3:
+            tl_mask = (np.abs(pos[:, 0]) >= 0.40) & (pos[:, 1] >= 0.65) & (pos[:, 1] <= 0.80) & (pos[:, 2] < -1.6)
+            if np.sum(tl_mask) > 0:
+                tints = np.tile(TINT_BY_SUB.get(3, (1.0, 1.0, 1.0)), (len(pos), 1))
+                tints[tl_mask] = [0.90, 0.12, 0.08]
+                colour = shade(normals) * tints
+                white_tile = TILES["white"]
+                wx = (white_tile[0] + white_tile[2] * 0.5) / ATLAS_W
+                wy = 1.0 - (white_tile[1] + white_tile[3] * 0.5) / ATLAS_H
+                remapped[tl_mask] = [wx, wy]
 
         parts.append(dict(sub=sub_index, verts=pos, tris=tris, uv=remapped, colour=colour))
         print("  body sub %2d: %4d verts %4d tris  tile %-9s uv %s"
