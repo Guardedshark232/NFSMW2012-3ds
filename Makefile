@@ -50,7 +50,7 @@ cia: $(TARGET).cia
 $(TARGET).smdh:
 	$(DEVKITPRO)/tools/bin/smdhtool --create "$(APP_TITLE)" "$(APP_DESCRIPTION)" "$(APP_AUTHOR)" $(APP_ICON) $@
 
-$(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh romfs/assets/world_atlas.t3x
+$(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh romfs/assets/world_atlas.t3x romfs/assets/car.t3x romfs/assets/car.mwcar
 	$(DEVKITPRO)/tools/bin/3dsxtool $(TARGET).elf $(TARGET).3dsx --smdh=$(TARGET).smdh --romfs=$(ROMFS_DIR)
 
 $(TARGET).cia: $(TARGET).elf meta/icon.icn meta/banner.bnr meta/app.rsf
@@ -82,6 +82,11 @@ tools/world_atlas.png: tools/world_texture_map.json tools/build_atlas.py tools/m
 	python3 tools/build_atlas.py
 
 romfs/assets/world_atlas.t3x: tools/world_atlas.png
+	$(DEVKITPRO)/tools/bin/tex3ds -f rgba4444 -z auto -o $@ $<
+
+# Player car: tools/extract_vehicle.py writes car.mwcar and car_atlas.png from
+# the retail VEHICLES bundles; only the texture packing runs during make.
+romfs/assets/car.t3x: tools/car_atlas.png
 	$(DEVKITPRO)/tools/bin/tex3ds -f rgba4444 -z auto -o $@ $<
 
 %.o: %.cpp

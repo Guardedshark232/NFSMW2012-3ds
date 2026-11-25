@@ -2,9 +2,18 @@
 #include "assets.h"
 #include "renderer.h"
 #include "world_mesh.h"
+#include <3ds/font.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+// Citro2D's C2D_TextBufNew() always maps the console's shared system font,
+// even when every glyph comes from a bundled .bcfnt. On systems where
+// APT_GetSharedFont() is unavailable that path leaves a NULL font and crashes
+// inside C2D_TextBufNew(). Installing the bundled font as libctru's shared
+// font first makes fontEnsureMapped() a no-op and keeps the HUD independent
+// of console fonts.
+extern "C" CFNT_s* g_sharedFont;
 
 // Extent of the generated top-down map (romfs:/assets/minimap.t3x):
 // 288 texels covering 1440 m, matching tools/gen_minimap.py.
@@ -21,13 +30,17 @@ static const float kRadarY = 36.0f;
 static C2D_TextBuf g_staticBuf = NULL;
 static C2D_TextBuf g_dynamicBuf = NULL;
 static C2D_TextBuf g_easyBuf = NULL;
-static C2D_Font g_font = NULL;
-static C2D_Font g_systemFont = NULL;
+static CFNT_s* g_bundledFont = NULL;
 static C2D_Text g_staticText[6];
+static C2D_Text g_easyText[6];
 static C2D_Text g_dynamicText[6];
 static unsigned int g_hudFrame = 0;
 static bool g_dynamicReady = false;
 static bool g_cachedDrifting = false;
+static bool g_bndlTextReady = false;
+static bool g_cachedBndlOpened = false;
+static uint32_t g_cachedBndlEntries = 0;
+static C2D_Text g_bndlText;
 
 enum StaticText {
     STATIC_HEADER,
@@ -38,21 +51,59 @@ enum StaticText {
     STATIC_CONTROL_LINE,
 };
 
+// Load a .bcfnt and hand it to libctru as the mapped "system" font. The data
+// must stay in linear memory because Citro2D's glyph cache keeps pointers into
+// the font's texture sheets.
+static CFNT_s* load_bundled_shared_font(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long size = ftell(f);
+    if (size < (long)sizeof(CFNT_s) || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    CFNT_s* cfnt = (CFNT_s*)linearAlloc((size_t)size);
+    if (!cfnt) {
+        fclose(f);
+        return NULL;
+    }
+    size_t got = fread(cfnt, 1, (size_t)size, f);
+    fclose(f);
+
+    // Reject anything that is not a little-endian CFNT with sane block count;
+    // fontFixPointers() trusts these pointers and would corrupt memory.
+    if (got != (size_t)size || cfnt->signature != 0x544E4643 ||
+        cfnt->endianness != 0xFEFF || cfnt->fileSize != (u32)size ||
+        cfnt->headerSize < 0x14 || cfnt->headerSize > (u32)size ||
+        cfnt->nBlocks == 0 || cfnt->nBlocks > 32) {
+        linearFree(cfnt);
+        return NULL;
+    }
+
+    fontFixPointers(cfnt);
+    g_sharedFont = cfnt;
+    return cfnt;
+}
+
 void hud_init(void) {
     g_dynamicReady = false;
     g_hudFrame = 0;
-    // Load a bundled font before creating text buffers. TextBufNew initializes
-    // Citro2D's glyph cache, which can fail on systems without a mapped system
-    // font even when the game includes its own font assets.
-    g_font = C2D_FontLoad("romfs:/assets/helvetica.bcfnt");
-    if (!g_font) {
-        g_font = C2D_FontLoad("romfs:/assets/conduit.bcfnt");
+
+    if (!g_bundledFont) {
+        g_bundledFont = load_bundled_shared_font("romfs:/assets/helvetica.bcfnt");
+        if (!g_bundledFont) {
+            g_bundledFont = load_bundled_shared_font("romfs:/assets/conduit.bcfnt");
+        }
     }
-    if (!g_font) {
-        g_systemFont = C2D_FontLoadSystem(CFG_REGION_USA);
-        g_font = g_systemFont;
-    }
-    if (!g_font) {
+
+    // Without a bundled font, fall back to the console font if it is usable.
+    if (!g_sharedFont && R_FAILED(fontEnsureMapped())) {
         printf("HUD: no usable font found; text disabled\n");
         return;
     }
@@ -70,29 +121,38 @@ void hud_init(void) {
         "A Drive | B Brake / Reverse | START Menu | SELECT Reset",
     };
     for (int i = 0; g_staticBuf && i < 6; i++) {
-        if (g_font) C2D_TextFontParse(&g_staticText[i], g_font, g_staticBuf, labels[i]);
-        else C2D_TextParse(&g_staticText[i], g_staticBuf, labels[i]);
+        C2D_TextParse(&g_staticText[i], g_staticBuf, labels[i]);
         C2D_TextOptimize(&g_staticText[i]);
     }
+
+    static const char* easyLabels[6] = {
+        "EASYDRIVE - QUICK MENU",
+        "1. Find Race: Hughes Park Sprint",
+        "2. Change Car: Porsche 911 Carrera S",
+        "3. Pro Mods: Burnout Nitrous Setup",
+        "4. Map: Fairhaven Open World",
+        "Press B to navigate | START to close",
+    };
+    for (int i = 0; g_easyBuf && i < 6; i++) {
+        C2D_TextParse(&g_easyText[i], g_easyBuf, easyLabels[i]);
+        C2D_TextOptimize(&g_easyText[i]);
+    }
+    g_bndlTextReady = false;
 }
 
 void hud_exit(void) {
-    if (g_font && g_font != g_systemFont) {
-        C2D_FontFree(g_font);
-    }
-    g_font = NULL;
-    if (g_systemFont) { C2D_FontFree(g_systemFont); g_systemFont = NULL; }
     if (g_staticBuf) {
         C2D_TextBufDelete(g_staticBuf);
         g_staticBuf = NULL;
     }
     if (g_dynamicBuf) { C2D_TextBufDelete(g_dynamicBuf); g_dynamicBuf = NULL; }
     if (g_easyBuf) { C2D_TextBufDelete(g_easyBuf); g_easyBuf = NULL; }
+    // g_bundledFont is intentionally never freed: Citro2D keeps a static
+    // glyph-sheet cache pointing into it, with no public API to invalidate it.
 }
 
 static inline void parse_cached(C2D_Text* text, C2D_TextBuf buf, const char* str) {
-    if (g_font) C2D_TextFontParse(text, g_font, buf, str);
-    else C2D_TextParse(text, buf, str);
+    C2D_TextParse(text, buf, str);
     C2D_TextOptimize(text);
 }
 
@@ -100,14 +160,6 @@ static inline void draw_cached(const C2D_Text* text, float x, float y,
                                float scaleX, float scaleY, u32 color) {
     if (!g_staticBuf || !g_dynamicBuf || !text) return;
     C2D_DrawText(text, C2D_WithColor, x, y, 0.5f, scaleX, scaleY, color);
-}
-
-static inline void draw_string(const char* str, float x, float y,
-                               float scaleX, float scaleY, u32 color) {
-    if (!g_easyBuf || !str || !str[0]) return;
-    C2D_Text text;
-    parse_cached(&text, g_easyBuf, str);
-    draw_cached(&text, x, y, scaleX, scaleY, color);
 }
 
 void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyDriveOpen, int easyDriveSelection, bool bndl_opened, uint32_t bndl_entries, float fps) {
@@ -119,7 +171,17 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
 
     g_hudFrame++;
     bool refreshText = !g_dynamicReady || ((g_hudFrame & 1u) == 0);
-    if (easyDriveOpen && g_easyBuf) C2D_TextBufClear(g_easyBuf);
+    if (!g_bndlTextReady || g_cachedBndlOpened != bndl_opened || g_cachedBndlEntries != bndl_entries) {
+        if (g_staticBuf) {
+            char bndlStr[96];
+            if (bndl_opened) snprintf(bndlStr, sizeof(bndlStr), "CHAMELEON 2: WORLDLIST.BNDL (%lu entries)", (unsigned long)bndl_entries);
+            else snprintf(bndlStr, sizeof(bndlStr), "CHAMELEON 2: SD / RomFS Streaming Ready");
+            parse_cached(&g_bndlText, g_staticBuf, bndlStr);
+            g_cachedBndlOpened = bndl_opened;
+            g_cachedBndlEntries = bndl_entries;
+            g_bndlTextReady = true;
+        }
+    }
     if (refreshText && g_dynamicBuf) {
         C2D_TextBufClear(g_dynamicBuf);
         char text[160];
@@ -138,9 +200,6 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
                      car->distance, fps, 1000.0f / (fps > 0 ? fps : 60.0f));
         }
         parse_cached(&g_dynamicText[3], g_dynamicBuf, text);
-        if (bndl_opened) snprintf(text, sizeof(text), "CHAMELEON 2: WORLDLIST.BNDL (%lu entries)", (unsigned long)bndl_entries);
-        else snprintf(text, sizeof(text), "CHAMELEON 2: SD / RomFS Streaming Ready");
-        parse_cached(&g_dynamicText[4], g_dynamicBuf, text);
         snprintf(text, sizeof(text), "POS %6.1f %6.1f  GND %6.2f  CAM %6.2f  CH %d/%d",
                  car->pos_x, car->pos_z,
                  renderer_debug_car_y(), renderer_debug_cam_y(),
@@ -240,7 +299,7 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
 
     draw_cached(&g_dynamicText[3], 16.f, 158.f, 0.44f, 0.44f,
                 g_cachedDrifting ? C2D_Color32(255, 220, 0, 255) : C2D_Color32(180, 200, 220, 255));
-    draw_cached(&g_dynamicText[4], 16.f, 178.f, 0.42f, 0.42f,
+    draw_cached(&g_bndlText, 16.f, 178.f, 0.42f, 0.42f,
                 bndl_opened ? C2D_Color32(0, 220, 120, 255) : C2D_Color32(100, 180, 220, 255));
     draw_cached(&g_staticText[STATIC_CAR_LINE], 16.f, 192.f, 0.40f, 0.40f, C2D_Color32(240, 200, 40, 255));
     draw_cached(&g_staticText[STATIC_CONTROL_LINE], 16.f, 206.f, 0.36f, 0.36f, C2D_Color32(140, 160, 180, 255));
@@ -252,23 +311,17 @@ void hud_render(C3D_RenderTarget* target, const CarPhysicsState* car, bool easyD
         C2D_DrawRectSolid(30, 36, 0, 260, 2, C2D_Color32(0, 220, 255, 255));
         C2D_DrawRectSolid(30, 194, 0, 260, 2, C2D_Color32(0, 220, 255, 255));
 
-        draw_string("EASYDRIVE - QUICK MENU", 42.f, 44.f, 0.52f, 0.52f, C2D_Color32(0, 220, 255, 255));
+        draw_cached(&g_easyText[0], 42.f, 44.f, 0.52f, 0.52f, C2D_Color32(0, 220, 255, 255));
 
-        const char* items[4] = {
-            "1. Find Race: Hughes Park Sprint",
-            "2. Change Car: Porsche 911 Carrera S",
-            "3. Pro Mods: Burnout Nitrous Setup",
-            "4. Map: Fairhaven Open World"
-        };
         for (int i = 0; i < 4; i++) {
             bool selected = (i == easyDriveSelection);
             if (selected) {
                 C2D_DrawRectSolid(38, 70 + i * 26, 0, 244, 22, C2D_Color32(0, 120, 160, 200));
             }
-            draw_string(items[i], 46.f, 74.f + i * 26, 0.46f, 0.46f,
+            draw_cached(&g_easyText[1 + i], 46.f, 74.f + i * 26, 0.46f, 0.46f,
                         selected ? C2D_Color32(255, 255, 255, 255) : C2D_Color32(160, 180, 200, 255));
         }
-        draw_string("Press B to navigate | START to close", 46.f, 178.f, 0.38f, 0.38f, C2D_Color32(140, 160, 180, 255));
+        draw_cached(&g_easyText[5], 46.f, 178.f, 0.38f, 0.38f, C2D_Color32(140, 160, 180, 255));
     }
 
     C2D_Flush();

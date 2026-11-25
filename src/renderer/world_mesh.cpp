@@ -82,7 +82,7 @@ static const int16_t GROUND_NONE = INT16_MAX;
 static const int   COL_WALL_DIM = 96;      // 96 * 8 m = 768 m
 static const float COL_WALL_CELL = 8.0f;
 static const float COL_WALL_ORIGIN = -128.0f;
-static const float GROUND_STEP_UP = 1.0f;  // highest walkable surface rule
+static const float GROUND_STEP_UP = 1.35f;  // highest walkable surface rule
 
 #pragma pack(push, 1)
 struct MWColHeader {
@@ -157,8 +157,6 @@ static bool g_streaming_mode = false;
 static std::vector<MWSectorRecord> g_manifest_sectors;
 static std::vector<LoadedSector> g_loaded_sectors;
 static std::vector<StreamCandidate> g_stream_candidates;
-static std::vector<MWVertex> g_load_verts;
-static std::vector<uint16_t> g_load_indices;
 static SectorLoadJob g_sector_load = {};
 
 // Fallback monolithic chunks (if manifest not found)
@@ -222,10 +220,9 @@ static float stream_priority(float car_x, float car_z, float forward_x, float fo
     float dx = cx - car_x;
     float dz = cz - car_z;
     float center_dist = sqrtf(dx * dx + dz * dz);
-    float flen = sqrtf(forward_x * forward_x + forward_z * forward_z);
     float ahead = 0.0f;
-    if (center_dist > 1e-3f && flen > 1e-4f) {
-        ahead = (dx * forward_x + dz * forward_z) / (center_dist * flen);
+    if (center_dist > 1e-3f) {
+        ahead = (dx * forward_x + dz * forward_z) / center_dist;
         if (ahead < 0.0f) ahead = 0.0f;
     }
     return dist - ahead * forward_weight;
@@ -688,26 +685,6 @@ static bool continue_sector_load(void) {
         return false;
     }
 
-    g_load_verts.resize(ch.numVerts);
-    if (fread(g_load_verts.data(), sizeof(MWVertex), ch.numVerts, f) != ch.numVerts) {
-        cancel_sector_load();
-        return false;
-    }
-
-    g_load_indices.resize(ch.numIndices);
-    if (fread(g_load_indices.data(), sizeof(uint16_t), ch.numIndices, f) != ch.numIndices) {
-        cancel_sector_load();
-        return false;
-    }
-
-    if (ch.numIndices & 1) {
-        uint16_t pad;
-        if (fread(&pad, 1, sizeof(pad), f) != sizeof(pad)) {
-            cancel_sector_load();
-            return false;
-        }
-    }
-
     WorldChunkMesh cm;
     memset(&cm, 0, sizeof(cm));
     cm.num_verts = ch.numVerts;
@@ -728,8 +705,24 @@ static bool continue_sector_load(void) {
         return false;
     }
 
-    memcpy(cm.vbo, g_load_verts.data(), sizeof(MWVertex) * ch.numVerts);
-    memcpy(cm.ibo, g_load_indices.data(), sizeof(uint16_t) * ch.numIndices);
+    // Stream directly into linear GPU buffers to avoid an extra CPU-heap copy.
+    if (fread(cm.vbo, sizeof(MWVertex), ch.numVerts, f) != ch.numVerts ||
+        fread(cm.ibo, sizeof(uint16_t), ch.numIndices, f) != ch.numIndices) {
+        linearFree(cm.vbo);
+        linearFree(cm.ibo);
+        cancel_sector_load();
+        return false;
+    }
+    if (ch.numIndices & 1) {
+        uint16_t pad;
+        if (fread(&pad, 1, sizeof(pad), f) != sizeof(pad)) {
+            linearFree(cm.vbo);
+            linearFree(cm.ibo);
+            cancel_sector_load();
+            return false;
+        }
+    }
+
     GSPGPU_FlushDataCache(cm.vbo, vbytes);
     GSPGPU_FlushDataCache(cm.ibo, ibytes);
     g_sector_load.sector.chunks.push_back(cm);
@@ -890,15 +883,9 @@ static float pick_ground_surface(int16_t lo, int16_t hi, float ref_y, float fall
     return fallback;
 }
 
-static bool sector_ground_at(const LoadedSector& sec, float x, float z,
-                             float ref_y, float fallback, float* out_y) {
-    if (sec.ground_lo.empty()) return false;
-    float sec_min_x = sec.gx * SECTOR_SIZE;
-    float sec_min_z = sec.gz * SECTOR_SIZE;
-    int ix = (int)floorf((x - sec_min_x) / GROUND_CELL);
-    int iz = (int)floorf((z - sec_min_z) / GROUND_CELL);
-    if (ix < 0 || ix >= GROUND_DIM || iz < 0 || iz >= GROUND_DIM) return false;
-
+static bool sector_ground_at(const LoadedSector& sec, int gx, int gz,
+                             int ix, int iz, float ref_y, float fallback, float* out_y) {
+    if (sec.gx != gx || sec.gz != gz || sec.ground_lo.empty()) return false;
     size_t idx = (size_t)iz * GROUND_DIM + ix;
     *out_y = pick_ground_surface(sec.ground_lo[idx], sec.ground_hi[idx],
                                  ref_y, fallback);
@@ -920,12 +907,19 @@ float world_mesh_ground_height(float x, float z, float ref_y, float fallback) {
     // cell.  Scan residents and the sector being streamed: a collider is
     // committed before all of its render chunks, and the car needs the floor
     // as soon as it arrives.
+    int gx = (int)floorf(x / SECTOR_SIZE);
+    int gz = (int)floorf(z / SECTOR_SIZE);
+    int ix = (int)floorf((x - (float)gx * SECTOR_SIZE) / GROUND_CELL);
+    int iz = (int)floorf((z - (float)gz * SECTOR_SIZE) / GROUND_CELL);
+    if (ix < 0) ix = 0; else if (ix >= GROUND_DIM) ix = GROUND_DIM - 1;
+    if (iz < 0) iz = 0; else if (iz >= GROUND_DIM) iz = GROUND_DIM - 1;
+
     float y;
     for (const auto& sec : g_loaded_sectors) {
-        if (sector_ground_at(sec, x, z, ref_y, fallback, &y)) return y;
+        if (sector_ground_at(sec, gx, gz, ix, iz, ref_y, fallback, &y)) return y;
     }
     if (g_sector_load.active &&
-        sector_ground_at(g_sector_load.sector, x, z, ref_y, fallback, &y))
+        sector_ground_at(g_sector_load.sector, gx, gz, ix, iz, ref_y, fallback, &y))
         return y;
     return fallback;
 }
@@ -1065,13 +1059,13 @@ float world_mesh_move(float* x, float* z, float target_x, float target_z,
 // ---------------------------------------------------------------------------
 void world_mesh_set_quality(bool high) {
     if (high) {
-        g_draw_dist = 140.0f;
-        g_triangle_budget = 120000;
-        g_max_draw_chunks = 96;
+        g_draw_dist = 95.0f;
+        g_triangle_budget = 50000;
+        g_max_draw_chunks = 48;
     } else {
-        g_draw_dist = 100.0f;
-        g_triangle_budget = 80000;
-        g_max_draw_chunks = 64;
+        g_draw_dist = 80.0f;
+        g_triangle_budget = 38000;
+        g_max_draw_chunks = 36;
     }
 }
 
@@ -1114,6 +1108,8 @@ void world_mesh_render(const C3D_Mtx* projection, const C3D_Mtx* view,
             // chunk 90 m ahead before the chunk under the car, and the
             // triangle budget then skipped the near chunk entirely.
             float priority = distance_sq;
+            if (draw_count >= g_max_draw_chunks &&
+                priority >= draw_list[g_max_draw_chunks - 1].priority) return;
             size_t at = 0;
             while (at < draw_count && draw_list[at].priority <= priority) at++;
             if (at >= g_max_draw_chunks) return;
@@ -1219,8 +1215,6 @@ void world_mesh_write_diag(void) {
 
 void world_mesh_exit(void) {
     cancel_sector_load();
-    std::vector<MWVertex>().swap(g_load_verts);
-    std::vector<uint16_t>().swap(g_load_indices);
     std::vector<StreamCandidate>().swap(g_stream_candidates);
     std::vector<MWSectorRecord>().swap(g_manifest_sectors);
     for (auto& sec : g_loaded_sectors) {

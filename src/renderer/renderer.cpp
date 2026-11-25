@@ -39,8 +39,19 @@ static DVLB_s* g_vshader_dvlb = NULL;
 static shaderProgram_s g_program;
 int g_uLoc_mvp = -1;
 
-static void* g_car_vbo = NULL;
-static size_t g_car_num_verts = 0;
+static void* g_car_data = NULL;
+static size_t g_car_data_size = 0;
+static const uint8_t* g_car_body_verts = NULL;
+static const uint16_t* g_car_body_indices = NULL;
+static const uint8_t* g_car_wheel_verts = NULL;
+static const uint16_t* g_car_wheel_indices = NULL;
+static uint32_t g_car_body_icount = 0;
+static uint32_t g_car_wheel_icount = 0;
+static float g_car_wheel_radius = 0.34f;
+static float g_car_wheel_track = 0.78f;
+static float g_car_wheel_base = 1.25f;
+static float g_car_wheel_y = 0.34f;
+static float g_car_wheel_spin = 0.0f;
 
 static void* g_flame_vbo = NULL;
 static size_t g_flame_num_verts = 0;
@@ -67,146 +78,62 @@ static bool  g_cam_valid = false;
 static float g_car_y = 0.0f;
 static bool  g_car_y_valid = false;
 
-static void car_add_quad(std::vector<Vertex>& v,
-                         float x1, float y1, float z1,
-                         float x2, float y2, float z2,
-                         float x3, float y3, float z3,
-                         float x4, float y4, float z4,
-                         float r, float g, float b) {
-    uint8_t cr = color_byte(r), cg = color_byte(g), cb = color_byte(b), ca = 255;
-    Vertex v1 = { {x1, y1, z1}, {cr, cg, cb, ca} };
-    Vertex v2 = { {x2, y2, z2}, {cr, cg, cb, ca} };
-    Vertex v3 = { {x3, y3, z3}, {cr, cg, cb, ca} };
-    Vertex v4 = { {x4, y4, z4}, {cr, cg, cb, ca} };
+// Imported 911 body plus one centred wheel block, written by
+// tools/extract_vehicle.py.  The runtime instances the wheel four times so
+// it can steer and spin without rebuilding vertices per frame.
+struct CarHeader {
+    char magic[4];
+    uint32_t version;
+    uint32_t body_verts, body_indices;
+    uint32_t wheel_verts, wheel_indices;
+    float wheel_radius, wheel_half_track, wheel_halfbase, wheel_centre_y;
+    uint32_t reserved;
+};
+static_assert(sizeof(CarHeader) == 44, "packed car header must be 44 bytes");
 
-    // Triangles (v1,v2,v3) and (v1,v3,v4)
-    v.push_back(v1); v.push_back(v2); v.push_back(v3);
-    v.push_back(v1); v.push_back(v3); v.push_back(v4);
-}
+static bool load_car_geometry(void) {
+    FILE* f = fopen("romfs:/assets/car.mwcar", "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size < (long)sizeof(CarHeader)) { fclose(f); return false; }
 
-static void build_car_geometry(void) {
-    std::vector<Vertex> verts;
+    void* data = linearAlloc((size + 0x3F) & ~0x3F);
+    if (!data) { fclose(f); return false; }
+    size_t got = fread(data, 1, (size_t)size, f);
+    fclose(f);
 
-    // Porsche Racing Yellow
-    float py_r = 0.96f, py_g = 0.80f, py_b = 0.05f;
-    // Dark Shadow Yellow for lower sides
-    float sy_r = 0.78f, sy_g = 0.64f, sy_b = 0.04f;
-    // Tinted Glass
-    float gl_r = 0.10f, gl_g = 0.12f, gl_b = 0.18f;
-    // Front Grille / Carbon Splitter
-    float cb_r = 0.08f, cb_g = 0.08f, cb_b = 0.09f;
-
-    // 1. Lower Chassis / Side Sills
-    float hw = 0.92f;   // half width
-    float l_f = 2.05f;  // front bumper Z
-    float l_r = -1.95f; // rear bumper Z
-
-    // 1. Contact Shadow Underneath Car (Grounds the vehicle to the road)
-    car_add_quad(verts, -hw - 0.15f, -0.348f, l_r - 0.15f,
-                  hw + 0.15f, -0.348f, l_r - 0.15f,
-                  hw + 0.15f, -0.348f, l_f + 0.15f,
-                 -hw - 0.15f, -0.348f, l_f + 0.15f,
-                 0.03f, 0.04f, 0.06f);
-
-    // Underbody / Splitter
-    car_add_quad(verts, -hw, -0.35f, l_r,  hw, -0.35f, l_r,  hw, -0.35f, l_f, -hw, -0.35f, l_f, cb_r, cb_g, cb_b);
-
-    // Front Bumper Face & Air Intake
-    car_add_quad(verts, -hw, -0.35f, l_f,  hw, -0.35f, l_f,  hw, 0.05f, l_f - 0.1f, -hw, 0.05f, l_f - 0.1f, cb_r, cb_g, cb_b);
-
-    // Rounded Front Hood (Porsche 911 curvature)
-    car_add_quad(verts, -hw, 0.05f, l_f - 0.1f,  hw, 0.05f, l_f - 0.1f,  hw * 0.88f, 0.28f, 0.65f, -hw * 0.88f, 0.28f, 0.65f, py_r, py_g, py_b);
-
-    // Windshield (Raked glass back to roof)
-    car_add_quad(verts, -hw * 0.85f, 0.28f, 0.65f,  hw * 0.85f, 0.28f, 0.65f,  hw * 0.72f, 0.68f, -0.15f, -hw * 0.72f, 0.68f, -0.15f, gl_r, gl_g, gl_b);
-
-    // Roof
-    car_add_quad(verts, -hw * 0.72f, 0.68f, -0.15f,  hw * 0.72f, 0.68f, -0.15f,  hw * 0.70f, 0.66f, -0.85f, -hw * 0.70f, 0.66f, -0.85f, py_r, py_g, py_b);
-
-    // Sloping Rear Fastback Glass (Iconic 911 rear silhouette)
-    car_add_quad(verts, -hw * 0.70f, 0.66f, -0.85f,  hw * 0.70f, 0.66f, -0.85f,  hw * 0.80f, 0.35f, -1.65f, -hw * 0.80f, 0.35f, -1.65f, gl_r, gl_g, gl_b);
-
-    // Rear Engine Deck & Spoiler
-    car_add_quad(verts, -hw * 0.85f, 0.35f, -1.65f,  hw * 0.85f, 0.35f, -1.65f,  hw, 0.22f, l_r, -hw, 0.22f, l_r, py_r, py_g, py_b);
-
-    // Rear Bumper Upper Face (Yellow)
-    car_add_quad(verts, -hw, 0.22f, l_r,  hw, 0.22f, l_r,  hw, -0.12f, l_r, -hw, -0.12f, l_r, py_r, py_g, py_b);
-
-    // Rear Diffuser & Lower Skirt (Matte Black)
-    car_add_quad(verts, -hw, -0.12f, l_r,  hw, -0.12f, l_r,  hw, -0.34f, l_r, -hw, -0.34f, l_r, cb_r, cb_g, cb_b);
-
-    // Rear License Plate Area
-    car_add_quad(verts, -0.28f, -0.08f, l_r - 0.005f, 0.28f, -0.08f, l_r - 0.005f, 0.28f, 0.04f, l_r - 0.005f, -0.28f, 0.04f, l_r - 0.005f, 0.08f, 0.08f, 0.09f);
-    car_add_quad(verts, -0.25f, -0.06f, l_r - 0.008f, 0.25f, -0.06f, l_r - 0.008f, 0.25f, 0.02f, l_r - 0.008f, -0.25f, 0.02f, l_r - 0.008f, 0.90f, 0.88f, 0.80f);
-
-    // Dual Twin Chrome Exhaust Tips
-    float ex_r = 0.85f, ex_g = 0.88f, ex_b = 0.92f;
-    float in_r = 0.04f, in_g = 0.04f, in_b = 0.05f;
-    // Left Exhaust Tips
-    car_add_quad(verts, -0.62f, -0.30f, l_r - 0.03f, -0.42f, -0.30f, l_r - 0.03f, -0.42f, -0.18f, l_r - 0.03f, -0.62f, -0.18f, l_r - 0.03f, ex_r, ex_g, ex_b);
-    car_add_quad(verts, -0.59f, -0.28f, l_r - 0.035f, -0.45f, -0.28f, l_r - 0.035f, -0.45f, -0.20f, l_r - 0.035f, -0.59f, -0.20f, l_r - 0.035f, in_r, in_g, in_b);
-    // Right Exhaust Tips
-    car_add_quad(verts, 0.42f, -0.30f, l_r - 0.03f, 0.62f, -0.30f, l_r - 0.03f, 0.62f, -0.18f, l_r - 0.03f, 0.42f, -0.18f, l_r - 0.03f, ex_r, ex_g, ex_b);
-    car_add_quad(verts, 0.45f, -0.28f, l_r - 0.035f, 0.59f, -0.28f, l_r - 0.035f, 0.59f, -0.20f, l_r - 0.035f, 0.45f, -0.20f, l_r - 0.035f, in_r, in_g, in_b);
-
-    // Left Side Body Panels & Windows
-    car_add_quad(verts, -hw, -0.35f, l_f, -hw, 0.05f, l_f - 0.1f, -hw, 0.28f, 0.65f, -hw, -0.35f, 0.65f, sy_r, sy_g, sy_b);
-    car_add_quad(verts, -hw, -0.35f, 0.65f, -hw, 0.28f, 0.65f, -hw, 0.22f, l_r, -hw, -0.35f, l_r, sy_r, sy_g, sy_b);
-    // Left Side Window Glass
-    car_add_quad(verts, -hw, 0.28f, 0.65f, -hw * 0.72f, 0.68f, -0.15f, -hw * 0.70f, 0.66f, -0.85f, -hw, 0.25f, -1.0f, gl_r, gl_g, gl_b);
-
-    // Right Side Body Panels & Windows
-    car_add_quad(verts,  hw, 0.05f, l_f - 0.1f,  hw, -0.35f, l_f,  hw, -0.35f, 0.65f,  hw, 0.28f, 0.65f, sy_r, sy_g, sy_b);
-    car_add_quad(verts,  hw, 0.28f, 0.65f,  hw, -0.35f, 0.65f,  hw, -0.35f, l_r,  hw, 0.22f, l_r, sy_r, sy_g, sy_b);
-    // Right Side Window Glass
-    car_add_quad(verts,  hw * 0.72f, 0.68f, -0.15f,  hw, 0.28f, 0.65f,  hw, 0.25f, -1.0f,  hw * 0.70f, 0.66f, -0.85f, gl_r, gl_g, gl_b);
-
-    // 2. Headlights (Bright Xenon Light Blue / White)
-    float hl_r = 0.85f, hl_g = 0.95f, hl_b = 1.0f;
-    car_add_quad(verts, -0.78f, 0.12f, l_f - 0.25f, -0.48f, 0.12f, l_f - 0.25f, -0.52f, 0.24f, l_f - 0.45f, -0.76f, 0.24f, l_f - 0.45f, hl_r, hl_g, hl_b);
-    car_add_quad(verts,  0.48f, 0.12f, l_f - 0.25f,  0.78f, 0.12f, l_f - 0.25f,  0.76f, 0.24f, l_f - 0.45f,  0.52f, 0.24f, l_f - 0.45f, hl_r, hl_g, hl_b);
-
-    // 3. Taillights (Crimson Red LED strip)
-    float tl_r = 1.0f, tl_g = 0.08f, tl_b = 0.08f;
-    car_add_quad(verts, -hw + 0.05f, 0.08f, l_r,  hw - 0.05f, 0.08f, l_r,  hw - 0.05f, 0.18f, l_r, -hw + 0.05f, 0.18f, l_r, tl_r, tl_g, tl_b);
-
-    // 4. Wheels & Wide Tires (Visible from side and rear)
-    float wh_r = 0.10f, wh_g = 0.10f, wh_b = 0.12f;
-    float rm_r = 0.75f, rm_g = 0.78f, rm_b = 0.82f;
-    // Front Left wheel (side face)
-    car_add_quad(verts, -hw - 0.02f, -0.32f, 1.25f, -hw - 0.02f, 0.05f, 1.25f, -hw - 0.02f, 0.05f, 0.65f, -hw - 0.02f, -0.32f, 0.65f, wh_r, wh_g, wh_b);
-    car_add_quad(verts, -hw - 0.025f, -0.20f, 1.05f, -hw - 0.025f, -0.05f, 1.05f, -hw - 0.025f, -0.05f, 0.85f, -hw - 0.025f, -0.20f, 0.85f, rm_r, rm_g, rm_b);
-    // Front Right wheel (side face)
-    car_add_quad(verts, hw + 0.02f, -0.32f, 0.65f, hw + 0.02f, 0.05f, 0.65f, hw + 0.02f, 0.05f, 1.25f, hw + 0.02f, -0.32f, 1.25f, wh_r, wh_g, wh_b);
-    car_add_quad(verts, hw + 0.025f, -0.20f, 0.85f, hw + 0.025f, -0.05f, 0.85f, hw + 0.025f, -0.05f, 1.05f, hw + 0.025f, -0.20f, 1.05f, rm_r, rm_g, rm_b);
-
-    // Rear Left wheel (side face + rear tread face)
-    car_add_quad(verts, -hw - 0.02f, -0.32f, -0.75f, -hw - 0.02f, 0.05f, -0.75f, -hw - 0.02f, 0.05f, -1.35f, -hw - 0.02f, -0.32f, -1.35f, wh_r, wh_g, wh_b);
-    car_add_quad(verts, -hw - 0.025f, -0.20f, -0.95f, -hw - 0.025f, -0.05f, -0.95f, -hw - 0.025f, -0.05f, -1.15f, -hw - 0.025f, -0.20f, -1.15f, rm_r, rm_g, rm_b);
-    // Rear Left tire back tread (visible from chase camera)
-    car_add_quad(verts, -hw - 0.02f, -0.33f, -1.35f, -hw + 0.22f, -0.33f, -1.35f, -hw + 0.22f, 0.04f, -1.35f, -hw - 0.02f, 0.04f, -1.35f, 0.08f, 0.08f, 0.09f);
-
-    // Rear Right wheel (side face + rear tread face)
-    car_add_quad(verts, hw + 0.02f, -0.32f, -1.35f, hw + 0.02f, 0.05f, -1.35f, hw + 0.02f, 0.05f, -0.75f, hw + 0.02f, -0.32f, -0.75f, wh_r, wh_g, wh_b);
-    car_add_quad(verts, hw + 0.025f, -0.20f, -1.15f, hw + 0.025f, -0.05f, -1.15f, hw + 0.025f, -0.05f, -0.95f, hw + 0.025f, -0.20f, -0.95f, rm_r, rm_g, rm_b);
-    // Rear Right tire back tread (visible from chase camera)
-    car_add_quad(verts, hw - 0.22f, -0.33f, -1.35f, hw + 0.02f, -0.33f, -1.35f, hw + 0.02f, 0.04f, -1.35f, hw - 0.22f, 0.04f, -1.35f, 0.08f, 0.08f, 0.09f);
-
-    // Aerodynamic Side Mirrors
-    float mr_r = 0.90f, mr_g = 0.75f, mr_b = 0.05f;
-    // Left mirror
-    car_add_quad(verts, -hw - 0.18f, 0.28f, 0.55f, -hw, 0.28f, 0.55f, -hw, 0.38f, 0.45f, -hw - 0.18f, 0.38f, 0.45f, mr_r, mr_g, mr_b);
-    car_add_quad(verts, -hw - 0.18f, 0.28f, 0.45f, -hw, 0.28f, 0.45f, -hw, 0.38f, 0.45f, -hw - 0.18f, 0.38f, 0.45f, gl_r, gl_g, gl_b);
-    // Right mirror
-    car_add_quad(verts, hw, 0.28f, 0.55f, hw + 0.18f, 0.28f, 0.55f, hw + 0.18f, 0.38f, 0.45f, hw, 0.38f, 0.45f, mr_r, mr_g, mr_b);
-    car_add_quad(verts, hw, 0.28f, 0.45f, hw + 0.18f, 0.28f, 0.45f, hw + 0.18f, 0.38f, 0.45f, hw, 0.38f, 0.45f, gl_r, gl_g, gl_b);
-
-    g_car_num_verts = verts.size();
-    g_car_vbo = linearAlloc(sizeof(Vertex) * g_car_num_verts);
-    if (g_car_vbo) {
-        memcpy(g_car_vbo, verts.data(), sizeof(Vertex) * g_car_num_verts);
-        GSPGPU_FlushDataCache(g_car_vbo, sizeof(Vertex) * g_car_num_verts);
+    const CarHeader* h = (const CarHeader*)data;
+    size_t need = sizeof(CarHeader)
+                + (size_t)h->body_indices * 2 + (size_t)h->body_verts * 20
+                + (size_t)h->wheel_indices * 2 + (size_t)h->wheel_verts * 20;
+    if (got != (size_t)size || memcmp(h->magic, "MWCR", 4) != 0 ||
+        h->version != 2 || need > (size_t)size) {
+        linearFree(data);
+        return false;
     }
+
+    const uint8_t* p = (const uint8_t*)data + sizeof(CarHeader);
+    g_car_body_indices = (const uint16_t*)p;
+    p += (size_t)h->body_indices * 2;
+    g_car_body_verts = p;
+    p += (size_t)h->body_verts * 20;
+    g_car_wheel_indices = (const uint16_t*)p;
+    p += (size_t)h->wheel_indices * 2;
+    g_car_wheel_verts = p;
+
+    g_car_body_icount = h->body_indices;
+    g_car_wheel_icount = h->wheel_indices;
+    g_car_wheel_radius = h->wheel_radius;
+    g_car_wheel_track = h->wheel_half_track;
+    g_car_wheel_base = h->wheel_halfbase;
+    g_car_wheel_y = h->wheel_centre_y;
+    g_car_data = data;
+    g_car_data_size = need;
+
+    GSPGPU_FlushDataCache(g_car_data, g_car_data_size);
+    return true;
 }
 
 static void build_flame_geometry(void) {
@@ -215,13 +142,13 @@ static void build_flame_geometry(void) {
     uint8_t cr = color_byte(0.9f), cg = color_byte(0.98f), cb = color_byte(1.0f);
 
     // Left Exhaust Flame Jet (Aligned with twin exhaust pipes)
-    float lx = -0.52f, y = -0.24f, z = -1.98f;
+    float lx = -0.45f, y = 0.12f, z = -2.18f;
     verts.push_back({ {lx - 0.10f, y, z}, {fr, fg, fb, 255} });
     verts.push_back({ {lx + 0.10f, y, z}, {fr, fg, fb, 255} });
     verts.push_back({ {lx, y, z - 0.95f}, {cr, cg, cb, 255} });
 
     // Right Exhaust Flame Jet
-    float rx = 0.52f;
+    float rx = 0.45f;
     verts.push_back({ {rx - 0.10f, y, z}, {fr, fg, fb, 255} });
     verts.push_back({ {rx + 0.10f, y, z}, {fr, fg, fb, 255} });
     verts.push_back({ {rx, y, z - 0.95f}, {cr, cg, cb, 255} });
@@ -334,7 +261,7 @@ void renderer_init(void) {
 
     static_assert(sizeof(Vertex) == 16, "packed vertex must be 16 bytes");
 
-    build_car_geometry();
+    load_car_geometry();
     build_flame_geometry();
     build_sky_geometry();
     build_water_geometry();
@@ -349,7 +276,7 @@ void renderer_exit(void) {
     hud_exit();
     assets_exit();
     world_mesh_exit();
-    if (g_car_vbo) { linearFree(g_car_vbo); g_car_vbo = NULL; }
+    if (g_car_data) { linearFree(g_car_data); g_car_data = NULL; }
     if (g_flame_vbo) { linearFree(g_flame_vbo); g_flame_vbo = NULL; }
     if (g_sky_vbo) { linearFree(g_sky_vbo); g_sky_vbo = NULL; }
     if (g_water_vbo) { linearFree(g_water_vbo); g_water_vbo = NULL; }
@@ -399,13 +326,25 @@ void renderer_render_world_and_car(float dt) {
 
     const CarPhysicsState* car = physics_get_state();
 
-    // Keep the car glued to the sampled harbour ground.  Never teleport:
-    // snap-to-height used to drop the car (and the chase camera) onto the
-    // seabed whenever the 4m ground cell sampled a lower deck through a
-    // hole in the quay, which buried the camera under the apron.
-    float ground = world_mesh_ground_height(car->pos_x, car->pos_z,
-                                           g_car_y_valid ? g_car_y : SPAWN_GROUND_Y,
-                                           g_car_y_valid ? g_car_y : SPAWN_GROUND_Y);
+    // Sample the ground across a 5-point car footprint (center + 4 inner wheel
+    // corners) so a single missing 2 m cell or ramp seam never drops the car
+    // through the floor.
+    float ref_y = g_car_y_valid ? g_car_y : SPAWN_GROUND_Y;
+    float ground = world_mesh_ground_height(car->pos_x, car->pos_z, ref_y, ref_y);
+    float fx = car->forward_x * 0.95f;
+    float fz = car->forward_z * 0.95f;
+    float rx = -car->forward_z * 0.55f;
+    float rz = car->forward_x * 0.55f;
+    for (int sx = -1; sx <= 1; sx += 2) {
+        for (int sz = -1; sz <= 1; sz += 2) {
+            float sx_pos = car->pos_x + sz * fx + sx * rx;
+            float sz_pos = car->pos_z + sz * fz + sx * rz;
+            float sample = world_mesh_ground_height(sx_pos, sz_pos, ref_y, -1e9f);
+            if (sample > -1e8f && sample <= ref_y + 1.35f && sample > ground) {
+                ground = sample;
+            }
+        }
+    }
     if (!g_car_y_valid) {
         g_car_y = ground;
         g_car_y_valid = true;
@@ -413,10 +352,10 @@ void renderer_render_world_and_car(float dt) {
         float dy = ground - g_car_y;
         float step = (dt > 0.0f) ? dt : 0.016f;
         if (dy < 0.0f) {
-            float max_down = 9.0f * step + 0.02f;   // ~9 m/s descent
+            float max_down = 12.0f * step + 0.02f;  // ~12 m/s descent
             if (dy < -max_down) dy = -max_down;
         } else {
-            float max_up = 6.0f * step + 0.02f;     // reject abrupt hops to nearby roofs
+            float max_up = 25.0f * step + 0.05f;    // track fast ramps; roofs rejected by GROUND_STEP_UP
             if (dy > max_up) dy = max_up;
         }
         g_car_y += dy;
@@ -524,25 +463,74 @@ void renderer_render_world_and_car(float dt) {
         C3D_DrawArrays(GPU_TRIANGLES, 0, g_water_num_verts);
     }
 
-    // Render the Porsche 911 on the harbour apron.
-    if (g_car_vbo && g_car_num_verts > 0) {
+    // Render the imported Porsche 911 on the harbour apron.
+    if (g_car_body_verts && g_car_body_icount > 0) {
+        float speed_ms = car->speed / 3.6f;
+        if (car->reversing) speed_ms = -speed_ms;
+        if (g_car_wheel_radius > 0.01f) {
+            g_car_wheel_spin += speed_ms / g_car_wheel_radius * step;
+            g_car_wheel_spin = fmodf(g_car_wheel_spin, 6.2831853f);
+        }
+
+        C3D_Tex* carTex = assets_car_atlas();
+        if (carTex) {
+            C3D_TexBind(0, carTex);
+            C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+            C3D_DirtyTexEnv(env);
+        }
+
         C3D_Mtx carModel, carMV, carMVP;
         Mtx_Identity(&carModel);
-        Mtx_Translate(&carModel, car->pos_x, g_car_y + 0.36f, car->pos_z, true);
+        Mtx_Translate(&carModel, car->pos_x, g_car_y, car->pos_z, true);
         Mtx_RotateY(&carModel, C3D_AngleFromDegrees(180.0f) + car->heading + car->drift_angle, true);
         Mtx_Multiply(&carMV, &camera, &carModel);
         Mtx_Multiply(&carMVP, &projection, &carMV);
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_uLoc_mvp, &carMVP);
         C3D_BufInfo* carInfo = C3D_GetBufInfo();
         BufInfo_Init(carInfo);
-        BufInfo_Add(carInfo, g_car_vbo, sizeof(Vertex), 2, 0x10);
+        BufInfo_Add(carInfo, g_car_body_verts, 20, 3, 0x210);
         // Disable culling for car (closed mesh, depth test handles occlusion).
         C3D_CullFace(GPU_CULL_NONE);
         C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
-        C3D_DrawArrays(GPU_TRIANGLES, 0, g_car_num_verts);
+        C3D_DrawElements(GPU_TRIANGLES, g_car_body_icount, C3D_UNSIGNED_SHORT,
+                         g_car_body_indices);
+
+        // Four wheel instances: front pair steers, all four spin.  The right
+        // side is the wheel mesh rotated 180 about Y so the rim faces out;
+        // that also reverses its local X, hence the negated spin.
+        if (g_car_wheel_verts && g_car_wheel_icount > 0) {
+            C3D_BufInfo* wheelInfo = C3D_GetBufInfo();
+            BufInfo_Init(wheelInfo);
+            BufInfo_Add(wheelInfo, g_car_wheel_verts, 20, 3, 0x210);
+            float steer = -car->steering_angle * 0.55f;
+            for (int side = -1; side <= 1; side += 2) {
+                for (int end = -1; end <= 1; end += 2) {
+                    C3D_Mtx wheel, wheelMV, wheelMVP;
+                    Mtx_Identity(&wheel);
+                    Mtx_Translate(&wheel, side * g_car_wheel_track,
+                                  g_car_wheel_y, end * g_car_wheel_base, true);
+                    if (end > 0) Mtx_RotateY(&wheel, steer, true);
+                    if (side < 0) Mtx_RotateY(&wheel, C3D_AngleFromDegrees(180.0f), true);
+                    Mtx_RotateX(&wheel, side * g_car_wheel_spin, true);
+                    Mtx_Multiply(&wheelMV, &carMV, &wheel);
+                    Mtx_Multiply(&wheelMVP, &projection, &wheelMV);
+                    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_uLoc_mvp, &wheelMVP);
+                    C3D_DrawElements(GPU_TRIANGLES, g_car_wheel_icount,
+                                     C3D_UNSIGNED_SHORT, g_car_wheel_indices);
+                }
+            }
+            C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_uLoc_mvp, &carMVP);
+        }
 
         // Draw cyan nitrous exhaust flames when boost is active
         if (car->nitrous_active && g_flame_vbo && g_flame_num_verts > 0) {
+            if (carTex) {
+                C3D_TexEnvInit(env);
+                C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, (GPU_TEVSRC)0, (GPU_TEVSRC)0);
+                C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+                C3D_DirtyTexEnv(env);
+            }
             C3D_BufInfo* flameInfo = C3D_GetBufInfo();
             BufInfo_Init(flameInfo);
             BufInfo_Add(flameInfo, g_flame_vbo, sizeof(Vertex), 2, 0x10);

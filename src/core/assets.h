@@ -9,3 +9,4 @@ void assets_exit(void);
 C2D_SpriteSheet assets_get_sheet(const char* name);
 C2D_Image assets_get_image(const char* sheetName, size_t index);
 C3D_Tex* assets_world_atlas(void);
+C3D_Tex* assets_car_atlas(void);
