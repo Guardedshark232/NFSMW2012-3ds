@@ -304,8 +304,14 @@ def body_parts(bundle):
         pos = pos * MODEL_SCALE
 
         normals = smooth_normals(pos, tris)
-        tint = np.array(TINT_BY_SUB.get(sub_index, (1.0, 1.0, 1.0)))
-        colour = shade(normals) * tint
+        if sub_index == 4:
+            tints = np.tile(np.array([0.35, 0.40, 0.48]), (len(pos), 1))
+            taillight_mask = (pos[:, 2] < -1.5) & (pos[:, 1] < 0.8)
+            tints[taillight_mask] = [0.90, 0.15, 0.10]
+            colour = shade(normals) * tints
+        else:
+            tint = np.array(TINT_BY_SUB.get(sub_index, (1.0, 1.0, 1.0)))
+            colour = shade(normals) * tint
 
         tile = TILES[TILE_BY_SUB.get(sub_index, "white")]
         if has_uv:
